@@ -21,7 +21,8 @@ rules:
     languages: [javascript, typescript]
     severity: INFO
     message: postMessage receiver observed; manually verify origin validation and sensitive actions.
-    pattern-regex: 'addEventListener\s*\(\s*["'"']message["'"']'
+    pattern-regex: >-
+      addEventListener\s*\(\s*["']message["']
     metadata:
       candidate_only: true
       manual_validation_required: true
