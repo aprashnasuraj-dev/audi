@@ -1,0 +1,246 @@
+name: Minly VDP Deep Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_current_scope:
+        description: I re-checked the Minly VDP and confirm minly.com is currently in scope
+        required: true
+        default: false
+        type: boolean
+      max_pages:
+        description: Maximum same-origin pages to map
+        required: true
+        default: '12'
+        type: choice
+        options: ['6', '12', '20']
+      delay_ms:
+        description: Minimum delay between allowed requests
+        required: true
+        default: '1200'
+        type: choice
+        options: ['1200', '2000', '3000']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minly-vdp-deep-audit
+  cancel-in-progress: false
+
+jobs:
+  deep-audit:
+    name: Exact-scope passive map and offline analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Confirm current authorization and exact scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm_current_scope }}" != "true" ]; then
+            echo 'Blocked: current Minly scope confirmation is required.'
+            exit 2
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          scope = yaml.safe_load(Path('programs/minly-vdp/scope.yml').read_text())
+          web = scope['in_scope']['website']
+          assert len(web) == 1
+          assert web[0]['url'] == 'https://minly.com/'
+          assert web[0]['exact_hosts'] == ['minly.com']
+          assert scope['account_policy']['own_accounts_only'] is True
+          assert scope['account_policy']['access_other_user_data'] == 'forbidden'
+          assert 'high_volume_automated_scanning' in scope['prohibited_actions']
+          print('scope gate: PASS — exact host minly.com only')
+          PY
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install analysis toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -U pip
+          python -m pip install -e '.[all]'
+          python -m pip install 'semgrep<2' 'detect-secrets<2'
+          python -m playwright install --with-deps chromium
+          python - <<'PY'
+          import platform, subprocess
+          print('python:', platform.python_version())
+          subprocess.run(['semgrep', '--version'], check=True)
+          subprocess.run(['detect-secrets', '--version'], check=True)
+          PY
+
+      - name: Compile and validate local audit code
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile programs/minly-vdp/minly_passive_map.py
+          semgrep --validate --config programs/minly-vdp/semgrep/minly-client.yml
+
+      - name: Run exact-scope passive browser map
+        shell: bash
+        run: |
+          set -euo pipefail
+          python programs/minly-vdp/minly_passive_map.py \
+            --output artifacts/minly-passive \
+            --max-pages "${{ inputs.max_pages }}" \
+            --request-budget 80 \
+            --delay-ms "${{ inputs.delay_ms }}" \
+            --settle-ms 900
+
+      - name: Run offline Semgrep candidate analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/minly-passive/tool-output
+          semgrep scan \
+            --config programs/minly-vdp/semgrep/minly-client.yml \
+            --json \
+            --output artifacts/minly-passive/tool-output/semgrep-raw.json \
+            artifacts/minly-passive/_temp_js || true
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          raw_path = Path('artifacts/minly-passive/tool-output/semgrep-raw.json')
+          out_path = Path('artifacts/minly-passive/semgrep-candidates.json')
+          raw = json.loads(raw_path.read_text()) if raw_path.exists() and raw_path.stat().st_size else {'results': []}
+          cleaned = []
+          for r in raw.get('results', []):
+              cleaned.append({
+                  'check_id': r.get('check_id'),
+                  'path': Path(r.get('path', '')).name,
+                  'start_line': (r.get('start') or {}).get('line'),
+                  'end_line': (r.get('end') or {}).get('line'),
+                  'message': ((r.get('extra') or {}).get('message') or '')[:240],
+                  'severity': ((r.get('extra') or {}).get('severity') or 'INFO'),
+                  'candidate_only': True,
+                  'manual_validation_required': True,
+              })
+          out_path.write_text(json.dumps({'candidate_count': len(cleaned), 'results': cleaned}, indent=2))
+          print(f'semgrep candidate count: {len(cleaned)}')
+          PY
+          rm -f artifacts/minly-passive/tool-output/semgrep-raw.json
+
+      - name: Run offline secret-pattern candidate scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          detect-secrets scan --all-files artifacts/minly-passive/_temp_js > artifacts/minly-passive/tool-output/detect-secrets-raw.json || true
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          src = Path('artifacts/minly-passive/tool-output/detect-secrets-raw.json')
+          dst = Path('artifacts/minly-passive/secret-pattern-candidates.json')
+          try:
+              data = json.loads(src.read_text())
+          except Exception:
+              data = {'results': {}}
+          cleaned = []
+          for filename, findings in (data.get('results') or {}).items():
+              for f in findings:
+                  cleaned.append({
+                      'file': Path(filename).name,
+                      'line_number': f.get('line_number'),
+                      'type': f.get('type'),
+                      'hashed_secret': f.get('hashed_secret'),
+                      'candidate_only': True,
+                      'manual_validation_required': True,
+                  })
+          dst.write_text(json.dumps({'candidate_count': len(cleaned), 'results': cleaned}, indent=2))
+          print(f'secret-pattern candidate count: {len(cleaned)}')
+          PY
+          rm -f artifacts/minly-passive/tool-output/detect-secrets-raw.json
+
+      - name: Build human manual-verification brief
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('artifacts/minly-passive')
+          surface = json.loads((root/'surface-map.json').read_text())
+          semgrep = json.loads((root/'semgrep-candidates.json').read_text())
+          secrets = json.loads((root/'secret-pattern-candidates.json').read_text())
+          counts = surface['counts']
+          lines = [
+              '# Minly manual verification brief',
+              '',
+              '> This is a research queue, not a vulnerability report. Every candidate requires human reproduction and impact validation under the VDP.',
+              '',
+              '## Run boundaries',
+              '',
+              '- Exact automated host: `minly.com` only.',
+              '- Third-party requests were blocked by the mapper.',
+              '- No form submission, fuzzing, brute force, subdomain enumeration, or automatic replay of API candidates was performed.',
+              '- Query values were removed from persisted URLs.',
+              '',
+              '## Mapping summary',
+              '',
+              f"- Pages mapped: **{counts['pages']}**",
+              f"- Requests allowed: **{counts['requests_allowed']}**",
+              f"- Requests blocked by scope/budget: **{counts['requests_blocked']}**",
+              f"- Observed API candidates: **{counts['observed_api_candidates']}**",
+              f"- Same-origin JS bundles analyzed: **{counts['same_origin_js']}**",
+              f"- Manual queue items: **{counts['manual_queue']}**",
+              f"- Semgrep hypotheses: **{semgrep['candidate_count']}**",
+              f"- Redacted secret-pattern hypotheses: **{secrets['candidate_count']}**",
+              '',
+              '## Highest-value manual checks',
+              '',
+              '1. Use normal UI flows first and note which object identifiers belong to your own account.',
+              '2. For horizontal authorization, wait until a second researcher-controlled account exists; never substitute another user\'s identifier.',
+              '3. Compare read/update/delete operations only between objects owned by your two test accounts.',
+              '4. Test state transitions (booking/order/payment/account) for sequence enforcement using only reversible own-account actions.',
+              '5. Treat client-side route, role, DOM sink, and secret-pattern signals only as hypotheses until a safe manual proof demonstrates impact.',
+              '',
+              '## Candidate queue',
+              '',
+          ]
+          for item in surface.get('manual_verification_queue', [])[:200]:
+              loc = item.get('url') or item.get('action') or item.get('path') or item.get('page') or ''
+              lines.append(f"- **{item.get('priority','medium')}** `{item.get('type','candidate')}` — `{loc}`")
+          (root/'MANUAL_VERIFICATION_BRIEF.md').write_text('\n'.join(lines)+'\n')
+          PY
+
+      - name: Remove temporary downloaded content
+        if: always()
+        shell: bash
+        run: |
+          rm -rf artifacts/minly-passive/_temp_js artifacts/minly-passive/tool-output
+
+      - name: Verify no raw browser content or obvious secrets remain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e artifacts/minly-passive/_temp_js
+          test ! -e artifacts/minly-passive/tool-output
+          python - <<'PY'
+          from pathlib import Path
+          forbidden = ['authorization:', 'set-cookie:', 'bearer ', 'cookie:']
+          for p in Path('artifacts/minly-passive').glob('*'):
+              if not p.is_file() or p.suffix not in {'.json', '.md', '.txt'}:
+                  continue
+              text = p.read_text(errors='ignore').lower()
+              bad = [x for x in forbidden if x in text]
+              if bad:
+                  raise SystemExit(f'potential secret/header material remained in {p}: {bad}')
+          print('artifact sanitation gate: PASS')
+          PY
+
+      - name: Upload sanitized research bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: minly-vdp-deep-audit-${{ github.run_id }}
+          path: artifacts/minly-passive/
+          if-no-files-found: error
+          retention-days: 30
