@@ -1,0 +1,68 @@
+schema_version: 1
+program: Minly VDP
+scope_file: programs/minly-vdp/scope.yml
+default_mode: dry_run_plan_only
+manual_trigger_required: true
+manual_confirmation_required_for_active_tests: true
+live_target_traffic_allowed_from_ci: false
+exact_scope:
+  website:
+    exact_hosts:
+      - minly.com
+    denied_host_patterns:
+      - "*.minly.com"
+  android_package: com.minly.users
+  ios_app_store_id: "1528802350"
+global_limits:
+  max_requests_per_second: 1
+  request_budget: 80
+  max_pages: 12
+  stop_on_429: true
+  no_fuzzing: true
+  no_identifier_enumeration: true
+  own_accounts_only: true
+  evidence_publication: sanitized_only
+modules:
+  mcp_ai_orchestration:
+    enabled: true
+    active_execution: disabled_in_ci
+    confirmation_flag: --confirm-active-test
+  recon:
+    enabled: true
+    allowed_modes:
+      - local_artifact_analysis
+      - exact_host_low_rate_public_mapping
+    disallowed_modes:
+      - subdomain_enumeration_against_minly
+      - high_volume_scanning
+      - unauthenticated_fuzzing
+  web_application_testing:
+    enabled: true
+    allowed_modes:
+      - checklist
+      - local_token_analysis
+      - owned_account_test_plan
+    disallowed_modes:
+      - waf_evasion_payload_generation
+      - object_id_enumeration
+      - destructive_business_logic_tests
+  mobile_deep_dive:
+    enabled: true
+    allowed_modes:
+      - public_static_analysis
+      - local_decompiled_source_scanning
+      - lab_only_dynamic_notes
+    disallowed_modes:
+      - bypassing_platform_controls_against_live_users
+      - extracting_third_party_data
+      - root_or_jailbreak_only_submission
+  api_security_testing:
+    enabled: true
+    allowed_modes:
+      - local_openapi_testcase_generation
+      - owned_object_matrix_generation
+      - low_impact_rate_limit_plan
+    disallowed_modes:
+      - blind_id_sweeping
+      - brute_force_rate_testing
+      - unauthorized_role_testing

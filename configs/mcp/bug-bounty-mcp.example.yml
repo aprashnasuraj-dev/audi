@@ -1,0 +1,22 @@
+schema_version: 1
+name: Bug Bounty MCP Server
+status: optional_external_connector
+dockerized_tools:
+  subfinder: configured_but_blocked_for_minly_scope
+  httpx: exact_host_probe_only_after_confirmation
+  nuclei: tech_detection_templates_only
+  naabu: blocked
+  katana: low_rate_exact_host_only
+  ffuf: blocked
+safety_contract:
+  manual_trigger_required: true
+  confirmation_flag: --confirm-active-test
+  allowed_hosts:
+    - minly.com
+  denied_hosts:
+    - "*.minly.com"
+  max_requests_per_second: 1
+  request_budget: 80
+  no_high_volume_scanning: true
+  no_identifier_enumeration: true
+  no_third_party_targets: true

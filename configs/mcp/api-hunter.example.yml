@@ -1,0 +1,19 @@
+schema_version: 1
+name: API Hunter
+status: optional_external_connector
+focus:
+  - BOLA_IDOR_owned_account_matrix
+  - BFLA_role_boundary_review
+  - mass_assignment_field_review
+  - normal_use_api_inventory
+safety_contract:
+  input_sources:
+    - local_openapi_file
+    - sanitized_har_metadata
+    - normal_use_researcher_owned_session
+  forbidden:
+    - blind_object_id_enumeration
+    - role_bruteforce
+    - uncontrolled_user_data_access
+    - high_volume_active_testing
+  every_candidate_requires_manual_poc: true

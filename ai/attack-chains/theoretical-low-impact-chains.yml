@@ -1,0 +1,42 @@
+schema_version: 1
+purpose: theoretical_prioritization_only
+public_repo_policy: no_live_exploit_steps_or_payloads
+chains:
+  - name: public_identifier_to_owned_object_authorization_check
+    status: theory_only
+    components:
+      - public profile or content identifier observed through normal browsing
+      - researcher-owned Account A object
+      - researcher-owned Account B session
+    safe_validation:
+      - use only A/B controlled objects
+      - perform one read-only cross-account comparison
+      - stop immediately after unauthorized result or correct denial
+    reportable_only_if:
+      - private data or state change crosses A/B boundary
+      - no uncontrolled user data is accessed
+  - name: mobile_deeplink_to_backend_boundary
+    status: theory_only
+    components:
+      - app/deep link discovered from official app artifact
+      - normal user session
+      - backend authorization response
+    safe_validation:
+      - verify on researcher-controlled device/account
+      - avoid root/jailbreak-only assumptions
+      - prove direct Minly data/session/backend impact
+  - name: business_logic_invariant_break
+    status: theory_only
+    components:
+      - coupon/order/booking/entitlement object
+      - server-controlled field invariant
+      - reversible or non-monetary proof
+    safe_validation:
+      - do not cause financial loss or duplicate fulfillment
+      - document expected vs actual invariant
+      - stop at minimum proof
+blocked_chain_types:
+  - WAF evasion as a goal
+  - blind identifier enumeration
+  - rate-limit stress testing
+  - third-party provider testing

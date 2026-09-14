@@ -21,8 +21,8 @@ jobs:
     timeout-minutes: 150
     env:
       MINLY_USER_STORAGE_STATE_B64: ${{ secrets.MINLY_USER_STORAGE_STATE_B64 }}
-      HALO_MINLY_USER_AUTH_CHECK_URL: ${{ secrets.MINLY_USER_AUTH_CHECK_URL }}
-      HALO_MINLY_USER_AUTH_CHECK_CONTAINS: ${{ secrets.MINLY_USER_AUTH_CHECK_CONTAINS }}
+      HALO_MINLY_USER_AUTH_CHECK_URL: ${{ secrets.HALO_MINLY_USER_AUTH_CHECK_URL }}
+      HALO_MINLY_USER_AUTH_CHECK_CONTAINS: ${{ secrets.HALO_MINLY_USER_AUTH_CHECK_CONTAINS }}
       MINLY_MANUAL_FINDINGS_B64: ${{ secrets.MINLY_MANUAL_FINDINGS_B64 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -99,7 +99,48 @@ jobs:
             programs/minly-vdp/minly_passive_map.py \
             programs/minly-vdp/har_candidate_map.py \
             programs/minly-vdp/public_mobile_fallback.py \
-            programs/minly-vdp/candidate_ranker.py
+            programs/minly-vdp/candidate_ranker.py \
+            ai/mcp-orchestrator/orchestrator.py \
+            recon/js-secrets/extract_js_surface.py \
+            recon/wayback-gf/wayback_gf_plan.py \
+            web/jwt-analysis/jwt_safety_check.py \
+            web/idor-bola/owned_account_matrix.py \
+            mobile/static-analysis/mobile_static_driver.py \
+            mobile/secret-scanning/secret_scan_plan.py \
+            api/openapi-parser/openapi_case_generator.py \
+            api/bola-idor/owned_object_testplan.py \
+            api/mass-assignment/mass_assignment_fieldlist.py \
+            api/rate-limit-analysis/low_impact_rate_limit_plan.py
+
+      - name: MCP/recon/web/mobile/API module guardrail gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python ai/mcp-orchestrator/orchestrator.py "Run low-impact recon on https://minly.com/ and list interesting endpoints" --json
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          safe = json.loads(subprocess.check_output([
+              sys.executable,
+              'ai/mcp-orchestrator/orchestrator.py',
+              'Run low-impact recon on https://minly.com/ and list interesting endpoints',
+              '--json',
+          ], text=True))
+          assert safe['accepted'] is True
+          assert 'recon' in safe['selected_modules']
+          blocked = json.loads(subprocess.check_output([
+              sys.executable,
+              'ai/mcp-orchestrator/orchestrator.py',
+              'Use ffuf and enumerate user IDs on https://minly.com/',
+              '--json',
+          ], text=True))
+          assert blocked['accepted'] is False
+          assert any('high_volume' in r or 'id_enumeration' in r for r in blocked['blocked_reasons'])
+          print('MCP_MODULE_GUARDRAIL_GATE=PASS')
+          PY
+          pytest tests/test_minly_module_gates.py
 
       - name: Materialize optional researcher-controlled web session
         shell: bash

@@ -1,0 +1,20 @@
+schema_version: 1
+name: HexStrike AI MCP Agents
+status: optional_external_connector
+mode: dry_run_plan_only
+tools_advertised_by_upstream: "150+"
+agents_advertised_by_upstream: "12+"
+safety_contract:
+  require_scope_file: programs/minly-vdp/scope.yml
+  exact_host_only: minly.com
+  require_human_confirmation_before_active_test: true
+  disabled_in_ci: true
+  never_execute:
+    - high_volume_scanning
+    - subdomain_expansion
+    - fuzzing
+    - credential_attack
+    - social_engineering
+notes:
+  - This repository stores configuration intent only.
+  - Live MCP credentials, endpoint URLs, tokens, and agent memory must stay outside the public repository.
