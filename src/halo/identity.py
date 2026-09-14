@@ -28,37 +28,59 @@ def _resolve(value: Any) -> Any:
 
 
 class IdentityVault:
-    """Loads named identities without persisting resolved secrets back to disk."""
+    """Loads named identities and resolves secrets only when that identity is used.
 
-    def __init__(self, identities: dict[str, Identity]):
-        if "anonymous" not in identities:
-            identities = {"anonymous": Identity("anonymous"), **identities}
-        self._identities = dict(identities)
+    Lazy resolution matters for multi-target runs: a mock target can use mock
+    credentials while a real target uses separate production/staging secrets,
+    without requiring every environment variable for every target up front.
+    """
+
+    def __init__(
+        self,
+        identities: dict[str, Identity] | None = None,
+        *,
+        raw_configs: dict[str, dict[str, Any]] | None = None,
+    ):
+        self._identities = dict(identities or {})
+        self._raw_configs = {str(k): dict(v or {}) for k, v in (raw_configs or {}).items()}
+        if "anonymous" not in self._identities and "anonymous" not in self._raw_configs:
+            self._identities = {"anonymous": Identity("anonymous", role="anonymous"), **self._identities}
 
     @classmethod
     def from_file(cls, path: Path) -> "IdentityVault":
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if raw.get("schema_version") != 1:
             raise ValueError("identity vault schema_version must be 1")
-        identities: dict[str, Identity] = {}
-        for name, cfg in (raw.get("identities") or {}).items():
-            resolved = _resolve(cfg or {})
-            headers = {str(k): str(v) for k, v in (resolved.get("headers") or {}).items()}
-            cookies = {str(k): str(v) for k, v in (resolved.get("cookies") or {}).items()}
-            bearer = resolved.get("bearer_token")
-            if bearer:
-                headers["Authorization"] = f"Bearer {bearer}"
-            identities[str(name)] = Identity(str(name), headers=headers, cookies=cookies)
-        return cls(identities)
+        configs = raw.get("identities") or {}
+        if not isinstance(configs, dict):
+            raise ValueError("identity vault 'identities' must be a mapping")
+        return cls(raw_configs={str(name): dict(cfg or {}) for name, cfg in configs.items()})
 
     def names(self) -> list[str]:
-        return list(self._identities)
+        ordered = list(self._identities)
+        ordered.extend(name for name in self._raw_configs if name not in self._identities)
+        return ordered
 
     def get(self, name: str) -> Identity:
-        try:
+        if name in self._identities:
             return self._identities[name]
-        except KeyError as exc:
-            raise KeyError(f"unknown identity {name!r}; available={self.names()}") from exc
+        if name not in self._raw_configs:
+            raise KeyError(f"unknown identity {name!r}; available={self.names()}")
+
+        resolved = _resolve(self._raw_configs[name])
+        headers = {str(k): str(v) for k, v in (resolved.get("headers") or {}).items()}
+        cookies = {str(k): str(v) for k, v in (resolved.get("cookies") or {}).items()}
+        bearer = resolved.get("bearer_token")
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        identity = Identity(
+            name,
+            role=str(resolved.get("role") or ""),
+            headers=headers,
+            cookies=cookies,
+        )
+        self._identities[name] = identity
+        return identity
 
     def selected(self, names: list[str] | None = None) -> list[Identity]:
         return [self.get(name) for name in (names or self.names())]
