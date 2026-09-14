@@ -1,12 +1,58 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from .base import AdapterRun, IdentityAwareAdapter
 from ..discovery.browser import BrowserCrawler
 from ..live_safety import live_safety
 from ..models import Identity
 from ..scope import ScopePolicy
+
+
+def _edge_profile(responses: list[dict[str, object]]) -> dict[str, object]:
+    technologies: set[str] = set()
+    challenge_statuses: list[int] = []
+    servers: set[str] = set()
+    for item in responses:
+        headers = {str(k).lower(): str(v) for k, v in dict(item.get("headers") or {}).items()}
+        status = int(item.get("status") or 0)
+        server = headers.get("server", "").strip()
+        if server:
+            servers.add(server)
+        if "cf-ray" in headers or "cloudflare" in server.lower():
+            technologies.add("cloudflare")
+        if "x-akamai-transformed" in headers or "akamai" in server.lower():
+            technologies.add("akamai")
+        if "x-sucuri-id" in headers or "sucuri" in server.lower():
+            technologies.add("sucuri")
+        if status in {403, 429, 503}:
+            challenge_statuses.append(status)
+    return {
+        "technologies": sorted(technologies),
+        "servers": sorted(servers),
+        "challenge_statuses": challenge_statuses,
+    }
+
+
+def _auth_flow_hints(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    hints: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        url = str(item.get("url") or "")
+        if not url or url in seen:
+            continue
+        split = urlsplit(url)
+        haystack = f"{split.hostname or ''}{split.path or ''}{split.query or ''}".lower()
+        if not any(token in haystack for token in ("oauth", "authorize", "oidc", "saml", "sso", "login")):
+            continue
+        seen.add(url)
+        hints.append({
+            "url": url,
+            "host": split.hostname or "",
+            "reason": str(item.get("reason") or "passive-auth-flow-observation"),
+        })
+    return hints[:25]
 
 
 class BrowserDiscoveryAdapter(IdentityAwareAdapter):
@@ -39,6 +85,8 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
         )
         result = await crawler.crawl(str(target["url"]), identity)
         context["request_budget_remaining"] = max(0, remaining - result.total_requests)
+        edge = _edge_profile(result.responses)
+        auth_hints = _auth_flow_hints(result.blocked_requests + result.passive_third_party_requests)
         discovered = context.setdefault("discovered", {})
         discovered[identity.name] = {
             "role": identity.role,
@@ -46,6 +94,8 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
             "requests": result.requests,
             "responses": result.responses,
             "websockets": result.websockets,
+            "edge_profile": edge,
+            "auth_flow_hints": auth_hints,
             "authentication_verified": result.authentication_verified,
             "authentication_reason": result.authentication_reason,
         }
@@ -60,6 +110,8 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
             "authentication_verified": result.authentication_verified,
             "authentication_reason": result.authentication_reason,
             "scope_transitions": policy.provenance(),
+            "edge_profile": edge,
+            "auth_flow_hints": auth_hints,
             "blocked_request_count": len(result.blocked_requests),
             "blocked_requests": result.blocked_requests[:50],
             "passive_third_party_request_count": len(result.passive_third_party_requests),
