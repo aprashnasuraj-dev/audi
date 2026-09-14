@@ -144,7 +144,10 @@ class ScopePolicy:
         candidate = _normalize_host(host)
         if any(candidate == item for item in self.flow_hosts):
             return True
-        return any(candidate == suffix or candidate.endswith("." + suffix) for suffix in self.flow_suffixes)
+        return any(
+            candidate != suffix and candidate.endswith("." + suffix)
+            for suffix in self.flow_suffixes
+        )
 
     def state_for_host(self, host: str) -> ScopeState:
         candidate = _normalize_host(host)
