@@ -46,9 +46,10 @@ class IdentityAwareAdapter(ABC):
             identities_attempted=[item.name for item in selected],
         )
         findings: list[Finding] = []
+        shared_context = context if context is not None else {}
         try:
             for identity in selected:
-                result = await self.run_one(target, identity, context or {})
+                result = await self.run_one(target, identity, shared_context)
                 findings.extend(result.findings)
             coverage.tools_executed = 1
             coverage.findings = len(findings)
