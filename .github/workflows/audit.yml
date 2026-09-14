@@ -42,8 +42,8 @@ jobs:
       - name: Start seeded mock target when requested
         if: ${{ inputs.target == 'mock-local' || inputs.target == '' }}
         run: |
-          echo 'HALO_USER_TOKEN=user-token' >> "$GITHUB_ENV"
-          echo 'HALO_ADMIN_TOKEN=admin-token' >> "$GITHUB_ENV"
+          echo 'HALO_MOCK_USER_TOKEN=user-token' >> "$GITHUB_ENV"
+          echo 'HALO_MOCK_ADMIN_TOKEN=admin-token' >> "$GITHUB_ENV"
           nohup python scripts/serve-mock.py > /tmp/halo-mock.log 2>&1 &
           for i in $(seq 1 20); do
             curl -fsS http://127.0.0.1:8765/ >/dev/null && exit 0
