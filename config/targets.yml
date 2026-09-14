@@ -26,3 +26,114 @@ targets:
     container_image: null
     iac_globs:
       - infra/**/*.tf
+
+  # Authorized program seed targets. Keep allow_hosts exact: wildcard families are
+  # explicitly out of scope. Authenticated subdomain flows require a separate,
+  # navigation-derived scope mechanism before they may be followed automatically.
+  - name: web-app
+    url: https://app.web.com/
+    allow_hosts:
+      - app.web.com
+    identities:
+      - anonymous
+    technologies:
+      - web
+    required_families:
+      - browser-discovery
+      - runtime-verification
+      - web-hardening
+    minimum_coverage_ratio: 1.0
+    scope_snapshot: "2026-09-14"
+    scope_note: "Exact app.web.com seed is in scope; arbitrary *.web.com enumeration is out of scope. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    limits:
+      max_pages: 25
+      request_budget: 250
+      timeout_seconds: 10
+    browser:
+      settle_ms: 750
+    openapi: null
+    graphql_schema: null
+    container_image: null
+    iac_globs: []
+    source_root: null
+
+  - name: networksolutions
+    url: https://www.networksolutions.com/
+    allow_hosts:
+      - www.networksolutions.com
+    identities:
+      - anonymous
+    technologies:
+      - web
+    required_families:
+      - browser-discovery
+      - runtime-verification
+      - web-hardening
+    minimum_coverage_ratio: 1.0
+    scope_snapshot: "2026-09-14"
+    scope_note: "Exact www.networksolutions.com seed is in scope; arbitrary *.networksolutions.com enumeration is out of scope. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    limits:
+      max_pages: 25
+      request_budget: 250
+      timeout_seconds: 10
+    browser:
+      settle_ms: 750
+    openapi: null
+    graphql_schema: null
+    container_image: null
+    iac_globs: []
+    source_root: null
+
+  - name: bluehost
+    url: https://www.bluehost.com/
+    allow_hosts:
+      - www.bluehost.com
+    identities:
+      - anonymous
+    technologies:
+      - web
+    required_families:
+      - browser-discovery
+      - runtime-verification
+      - web-hardening
+    minimum_coverage_ratio: 1.0
+    scope_snapshot: "2026-09-14"
+    scope_note: "Exact www.bluehost.com seed is in scope; arbitrary *.bluehost.com enumeration is out of scope. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    limits:
+      max_pages: 25
+      request_budget: 250
+      timeout_seconds: 10
+    browser:
+      settle_ms: 750
+    openapi: null
+    graphql_schema: null
+    container_image: null
+    iac_globs: []
+    source_root: null
+
+  - name: hostgator
+    url: https://www.hostgator.com/
+    allow_hosts:
+      - www.hostgator.com
+    identities:
+      - anonymous
+    technologies:
+      - web
+    required_families:
+      - browser-discovery
+      - runtime-verification
+      - web-hardening
+    minimum_coverage_ratio: 1.0
+    scope_snapshot: "2026-09-14"
+    scope_note: "Exact www.hostgator.com seed is in scope; arbitrary *.hostgator.com enumeration is out of scope. app.gator.com and arbitrary *.hostgator.com are not statically authorized. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    limits:
+      max_pages: 25
+      request_budget: 250
+      timeout_seconds: 10
+    browser:
+      settle_ms: 750
+    openapi: null
+    graphql_schema: null
+    container_image: null
+    iac_globs: []
+    source_root: null
