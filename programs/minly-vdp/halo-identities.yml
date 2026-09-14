@@ -1,0 +1,10 @@
+schema_version: 1
+identities:
+  anonymous:
+    role: anonymous
+
+  minly-user:
+    role: user
+    storage_state_path: ${HALO_MINLY_USER_STORAGE_STATE}
+    auth_check_url: ${HALO_MINLY_USER_AUTH_CHECK_URL}
+    auth_check_contains: ${HALO_MINLY_USER_AUTH_CHECK_CONTAINS}
