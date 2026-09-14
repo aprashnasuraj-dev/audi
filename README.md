@@ -1,54 +1,84 @@
 # HALO Audit
 
-A clean-room security-audit pipeline centered on authenticated application testing, browser discovery, cross-identity replay, explicit coverage states, and reproduction-gated reporting.
+HALO is a bounded, evidence-first application audit runner for explicitly authorized targets. It combines browser-executed discovery, authenticated session validation, conservative cross-identity replay, passive contract telemetry, hardening checks, explicit coverage accounting, reproduction gates, and privacy-preserving reporting.
+
+The repository is designed to fail closed: missing authorization context, stale scope, incomplete required coverage, invalid authentication, exhausted request budgets, rate-limit signals, or unsupported reproduction paths prevent a run from being treated as a clean result.
 
 ## Architecture
 
-### Phase 1 — Foundation
+### 1. Scope and live-safety boundary
 
-- **Identity vault**: `config/identities.yml` resolves secrets from environment variables and guarantees an `anonymous` identity. Every network-facing DAST/API adapter must inherit the vault-bound adapter contract.
-- **Browser discovery**: Playwright executes JavaScript, crawls same-scope pages, captures XHR/fetch traffic, and records discovered URLs separately for each identity. Out-of-scope HTTP(S) browser requests are blocked before transmission.
-- **Replay transport**: captured GET/HEAD requests are replayed under identity pairs and response fingerprints are compared. Authorization headers/cookies from the captured request are stripped and replaced by the selected identity.
-- **Shared request budget**: browser discovery, replay, and network reproduction consume the same per-target request budget. Exhaustion is a failure, not partial success.
-- **Input gates**: OpenAPI, GraphQL, container, and IaC families emit explicit `SKIPPED` reasons when required input is absent.
-- **Seeded target**: the built-in mock SPA intentionally lets a normal `user` read `/api/admin/secret`. CI must detect this before any scaling work is trusted.
+Each target is defined in `config/targets.yml` with an exact seed host. Live targets use:
 
-### Phase 2 — Verification gate
+- exact `allow_hosts` for seed authorization,
+- optional navigation-derived authenticated-flow suffixes rather than wildcard enumeration,
+- explicit denied hosts,
+- a dated scope snapshot and maximum age,
+- a shared request budget,
+- per-host request pacing,
+- stop-on-429 behavior,
+- required-family and minimum-coverage publication gates.
 
-The seeded acceptance test requires all of the following:
+`src/halo/live_safety.py` and the browser/replay layers enforce these rules. A discovered host is not automatically trusted merely because it shares a parent domain; transition evidence must be captured and accepted by the configured policy.
 
-1. authenticated findings > 0,
-2. browser discovery reaches API URLs beyond the SPA shell,
-3. cross-identity replay detects at least one response difference,
-4. the planted non-admin/admin-surface weakness is detected.
+### 2. Identity and authenticated browser sessions
 
-### Phase 3 — Hypothesis layer
+`config/identities.yml` supports anonymous, header/cookie, bearer-token, and Playwright storage-state identities. Live browser identities are isolated per target/brand.
 
-Optional enrichment runs only after the foundation is usable:
+For storage-state identities HALO also requires an authentication proof check (`auth_check_url` plus an expected marker). An expired or unusable session therefore fails preflight/coverage instead of silently degrading to anonymous testing.
 
-- threat-model enrichment,
-- chain composition (chains remain hypotheses),
-- reproduction verification before candidates are admitted to the final report.
+Secrets and storage-state JSON files are never committed. The GitHub workflow materializes storage state into an ephemeral runner directory from repository secrets and removes that operational dependency from source control.
 
-Replay findings are re-requested, contract findings are re-checked against the declared contract plus a safe GET/HEAD replay, and Trivy findings are confirmed by a cached repeat scan. Unsupported finding types fail the reproduction family explicitly rather than disappearing silently.
+### 3. Browser discovery and passive telemetry
 
-### Phase 4 — Combined run and report
+Playwright executes the rendered application under each selected identity while enforcing scope and request limits before network transmission. Discovery records privacy-sanitized evidence including:
 
-`scripts/run-audit.py` can run one or all targets from `config/targets.yml`. Every family reports one of:
+- rendered page/navigation flow,
+- XHR/fetch requests,
+- observed API paths and methods,
+- passive GraphQL operation metadata, including observed POST metadata without actively issuing unsafe methods,
+- WebSocket endpoint metadata,
+- scope-transition provenance,
+- edge/response metadata needed by downstream checks.
 
-`RAN | SKIPPED | FAILED | TIMEOUT`
+Third-party resource handling is policy controlled. Out-of-scope target navigation is blocked even when passive third-party resources are allowed.
 
-Implemented gated families:
+### 4. Runtime verification
 
-- `browser-discovery` — Playwright, per identity
-- `runtime-verification` — cross-identity GET/HEAD replay
-- `api-contract` — observed API surface versus OpenAPI
-- `graphql-schema` — observed GET GraphQL operations versus declared schema
-- `container` — Trivy image vulnerabilities
-- `iac` — Trivy configuration/misconfiguration scanning
-- `reproduction-verification` — Phase-3 final admission gate
+Runtime verification replays only safe `GET`/`HEAD` observations and compares semantic response fingerprints across identities. Captured authorization/cookie material is not blindly reused; the selected vault identity supplies its own state.
 
-The combined output includes:
+A response difference is a signal, not automatically a vulnerability. Higher-confidence authorization findings require narrower evidence, and all network reproduction consumes the same target request budget.
+
+### 5. Implemented families
+
+Every family emits an explicit `RAN`, `SKIPPED`, `FAILED`, or `TIMEOUT` coverage record.
+
+- `browser-discovery` — JavaScript-aware discovery per identity
+- `runtime-verification` — safe cross-identity replay and semantic comparison
+- `web-hardening` — conservative response-policy observations such as HSTS/CSP
+- `api-contract` — observed API paths/methods versus a declared OpenAPI contract
+- `graphql-schema` — passively observed GraphQL operations versus a declared schema
+- `container` — Trivy image vulnerability execution when configured
+- `iac` — Trivy configuration/misconfiguration execution when configured
+- `reproduction-verification` — final evidence admission gate when hypothesis mode is enabled
+
+Optional families are never treated as successful merely because input is absent. Required families must actually run for publication to pass.
+
+### 6. Integrity, canonicalization, and contextual triage
+
+HALO keeps raw/normalized/excluded accounting so adapter result loss cannot silently become a zero-finding result. Canonicalization merges semantically equivalent observations while retaining the supporting tool evidence instead of inflating the issue count.
+
+Technology applicability and contextual triage prevent irrelevant technology-specific checks from becoming canonical findings. Optional known-issue fingerprints can classify novelty conservatively without suppressing the underlying evidence.
+
+### 7. Reproduction and hypothesis layer
+
+When `--hypothesis` is enabled, findings are enriched and then re-verified before final admission. Replay findings are re-requested safely, contract findings are re-checked against their declared inputs and passive observations, and supported local-tool findings can be confirmed by repeat execution. Unsupported reproduction types fail closed rather than disappearing silently.
+
+### 8. Privacy-preserving reporting
+
+Persisted reports are sanitized before publication. Sensitive headers, cookies, OAuth/session query values, and other credential-like values are redacted while preserving enough route and evidence context for review.
+
+The combined bundle can include:
 
 - `report.json`
 - `report.md`
@@ -57,51 +87,72 @@ The combined output includes:
 - `findings.sarif`
 - `sbom.cdx.json`
 - `vex.openvex.json`
+- per-target run evidence and coverage metadata
 
-## Tool integrity
+## Preflight
 
-`config/tool-versions.yml` pins Trivy. `scripts/install-trivy.sh` first verifies the publisher's checksum manifest against a pinned SHA-256, then verifies the release tarball against that verified manifest before installation. CI actions are pinned to immutable commit SHAs.
+`python scripts/preflight.py` performs a zero-target-traffic readiness check. For live targets it validates the configured scope, scope freshness, identity availability, operational authentication material, required settings, and local family inputs before a browser is launched.
 
-## Safety boundary
+Examples:
 
-- network targets are restricted by an explicit host allowlist,
-- Playwright blocks out-of-scope HTTP(S) traffic before it leaves the browser,
-- replay permits **GET/HEAD only**,
-- redirects are not automatically followed by replay,
-- captured authorization/cookie headers are never blindly reused,
-- the target request budget is shared across browser discovery, replay, and reproduction,
-- missing input is `SKIPPED`; execution/tool failures are `FAILED`; timeouts are `TIMEOUT`,
-- missing coverage is never reported as a clean pass.
+```bash
+python scripts/preflight.py --target web-app
+python scripts/preflight.py --live-only
+```
 
-## Quick verification
+A live run should not be considered ready until preflight succeeds with the intended authenticated identity/session material present.
+
+## Local verification
+
+Install the package and browser dependencies:
 
 ```bash
 python -m pip install -e '.[all]'
 python -m playwright install chromium
-python -m pytest \
-  tests/test_foundation.py \
-  tests/test_hypothesis_reporting.py \
-  tests/test_adapter_contract.py \
-  tests/test_optional_families.py
-python -m pytest tests/test_mock_pipeline.py
+python -m pytest
+python -m compileall -q src tests scripts
 ```
 
-For the integrated mock run:
+Run the seeded mock target:
 
 ```bash
-export HALO_USER_TOKEN=user-token
-export HALO_ADMIN_TOKEN=admin-token
+export HALO_MOCK_USER_TOKEN=user-token
+export HALO_MOCK_ADMIN_TOKEN=admin-token
 python scripts/serve-mock.py &
-python scripts/run-audit.py --target mock-local --hypothesis --phase2-gate --output artifacts/local
+python scripts/run-audit.py \
+  --target mock-local \
+  --hypothesis \
+  --phase2-gate \
+  --output artifacts/local
 ```
 
-For IaC/container families, install the pinned Trivy build first:
+The seeded acceptance gate proves authenticated discovery, API discovery beyond the SPA shell, cross-identity replay, and detection of the planted non-admin/admin-surface weakness.
 
-```bash
-bash scripts/install-trivy.sh
-export PATH="$HOME/.local/bin:$PATH"
+## Live GitHub Actions workflow
+
+`.github/workflows/audit.yml` is manually dispatched. Select exactly one authorized target or `all-live`, confirm the configured authorization scope, and optionally enable hypothesis/reproduction mode.
+
+For each live browser identity configure the matching GitHub Actions secrets. For example the `web-app` identity uses:
+
+```text
+HALO_WEB_USER_STORAGE_STATE_B64
+HALO_WEB_USER_AUTH_CHECK_URL
+HALO_WEB_USER_AUTH_CHECK_CONTAINS
 ```
 
-## Interpretation
+The storage-state secret is the base64 encoding of a Playwright storage-state JSON file. Equivalent target-specific variables exist for NetworkSolutions, Bluehost, and HostGator. The workflow materializes these only inside the runner temporary directory, runs zero-traffic preflight, installs the pinned toolchain, executes the selected target, and uploads the report bundle.
 
-A response differential is a **signal**, not automatically a vulnerability. The high-severity mock rule is deliberately narrower: it requires a non-admin identity to receive a successful response from an obvious `/admin` surface. Contract drift also does not imply exploitability. Final reporting keeps the evidence grade/confidence and requires the Phase-3 reproduction gate when `--hypothesis` is enabled.
+## Tool integrity
+
+`config/tool-versions.yml` pins Trivy. `scripts/install-trivy.sh` verifies the publisher checksum manifest against its pinned digest and then verifies the downloaded release artifact before installation. GitHub Actions are pinned to immutable commit SHAs.
+
+## Interpretation rules
+
+- A zero-finding family is meaningful only when its coverage record shows successful execution.
+- `SKIPPED` is not equivalent to `RAN`.
+- A response differential is evidence, not automatically an exploitable defect.
+- Contract drift and missing hardening headers are observations whose practical impact depends on context.
+- Canonical issue counts are deduplicated issue counts, while corroborating observations remain attached as evidence.
+- Live results are publishable only when scope, authentication, required-family coverage, integrity accounting, and configured publication gates pass.
+
+Use HALO only against targets for which you have current authorization and keep `config/targets.yml` synchronized with that authorization boundary.
