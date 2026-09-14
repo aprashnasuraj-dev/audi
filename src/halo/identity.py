@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import yaml
 from .models import Identity
 
 _ENV = re.compile(r"^\$\{([A-Z0-9_]+)\}$")
+_AUTHENTICATION_MODES = frozenset({"required", "optional", "anonymous-only"})
 
 
 def _resolve(value: Any) -> Any:
@@ -25,6 +27,49 @@ def _resolve(value: Any) -> Any:
     if isinstance(value, list):
         return [_resolve(v) for v in value]
     return value
+
+
+def authentication_mode(target: dict[str, Any]) -> str:
+    """Return the target's authentication policy with legacy compatibility.
+
+    required: authenticated coverage is mandatory and missing session material blocks.
+    optional: use authenticated identities when operational; otherwise run public surface only.
+    anonymous-only: intentionally ignore configured non-anonymous identities.
+    """
+    configured = target.get("authentication_mode")
+    if configured is None:
+        return "required" if bool(target.get("require_authenticated_identity")) else "optional"
+    mode = str(configured).strip().lower()
+    if mode not in _AUTHENTICATION_MODES:
+        raise ValueError(
+            f"authentication_mode must be one of {sorted(_AUTHENTICATION_MODES)}, got {configured!r}"
+        )
+    return mode
+
+
+@dataclass(frozen=True)
+class IdentityResolution:
+    mode: str
+    requested: tuple[str, ...]
+    operational: tuple[Identity, ...]
+    unavailable: dict[str, str]
+
+    @property
+    def operational_names(self) -> list[str]:
+        return [identity.name for identity in self.operational]
+
+    @property
+    def authenticated_names(self) -> list[str]:
+        return [identity.name for identity in self.operational if identity.role != "anonymous"]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "authentication_mode": self.mode,
+            "requested": list(self.requested),
+            "operational": self.operational_names,
+            "authenticated_operational": self.authenticated_names,
+            "unavailable": dict(self.unavailable),
+        }
 
 
 class IdentityVault:
@@ -110,3 +155,29 @@ class IdentityVault:
 
     def selected(self, names: list[str] | None = None) -> list[Identity]:
         return [self.get(name) for name in (names or self.names())]
+
+    def resolve_available(self, names: list[str]) -> tuple[list[Identity], dict[str, str]]:
+        """Resolve what can run now without weakening missing-secret failures globally."""
+        operational: list[Identity] = []
+        unavailable: dict[str, str] = {}
+        for name in names:
+            try:
+                operational.append(self.get(name))
+            except Exception as exc:
+                unavailable[name] = f"{type(exc).__name__}: {exc}"
+        return operational, unavailable
+
+    def resolve_for_target(self, target: dict[str, Any]) -> IdentityResolution:
+        mode = authentication_mode(target)
+        requested = [str(name) for name in target.get("identities") or self.names()]
+        if mode == "anonymous-only":
+            requested = ["anonymous"]
+        elif mode == "optional" and "anonymous" not in requested:
+            requested.insert(0, "anonymous")
+        operational, unavailable = self.resolve_available(requested)
+        return IdentityResolution(
+            mode=mode,
+            requested=tuple(requested),
+            operational=tuple(operational),
+            unavailable=unavailable,
+        )

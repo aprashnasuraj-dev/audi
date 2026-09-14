@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 from .base import AdapterRun, IdentityAwareAdapter
 from ..discovery.browser import BrowserCrawler
+from ..identity import authentication_mode
 from ..live_safety import live_safety
 from ..models import Identity
 from ..scope import ScopePolicy
@@ -123,7 +124,7 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
             "passive_third_party_request_count": len(result.passive_third_party_requests),
             "passive_third_party_requests": result.passive_third_party_requests[:50],
         }
-        if identity.role != "anonymous" and target.get("require_authenticated_identity"):
+        if identity.role != "anonymous" and authentication_mode(target) == "required":
             if not result.authentication_verified:
                 raise RuntimeError(
                     f"authentication was not verified at both ends for identity {identity.name!r}: "

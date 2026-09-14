@@ -5,7 +5,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from halo.canonical import canonicalize_findings
-from halo.identity import IdentityVault
+from halo.config import load_targets
+from halo.identity import IdentityVault, authentication_mode
 from halo.models import Finding, Identity
 from halo.preflight import preflight_target
 from halo.privacy import redact_url_for_evidence, sanitize_for_report
@@ -33,6 +34,14 @@ def _live_target() -> dict:
         },
         "browser": {"allow_third_party_resources": True},
     }
+
+
+def _optional_live_target() -> dict:
+    target = _live_target()
+    target.pop("require_authenticated_identity", None)
+    target["authentication_mode"] = "optional"
+    target["required_families"] = ["browser-discovery", "web-hardening"]
+    return target
 
 
 def _vault() -> IdentityVault:
@@ -93,6 +102,7 @@ def test_live_preflight_ready_with_exact_scope_and_operational_auth(tmp_path: Pa
     result = preflight_target("demo", _live_target(), _vault(), repo_root=tmp_path)
     assert result.ready, result.errors
     assert result.authenticated_identities == ["user"]
+    assert result.authentication_mode == "required"
 
 
 def test_live_preflight_rejects_wildcard_seed_scope(tmp_path: Path):
@@ -113,3 +123,65 @@ def test_live_preflight_rejects_missing_authenticated_identity(tmp_path: Path):
     assert not result.ready
     assert any("not operational" in error for error in result.errors)
     assert any("non-anonymous" in error for error in result.errors)
+
+
+def test_optional_auth_live_preflight_falls_back_to_public_surface(tmp_path: Path):
+    result = preflight_target(
+        "demo",
+        _optional_live_target(),
+        IdentityVault({"anonymous": Identity("anonymous")}),
+        repo_root=tmp_path,
+    )
+    assert result.ready, result.errors
+    assert result.authentication_mode == "optional"
+    assert result.operational_identities == ["anonymous"]
+    assert result.authenticated_identities == []
+    assert "user" in result.unavailable_identities
+    assert any("public-surface" in warning for warning in result.warnings)
+    assert any("dormant" in warning for warning in result.warnings)
+
+
+def test_optional_auth_uses_authenticated_identity_when_available(tmp_path: Path):
+    result = preflight_target("demo", _optional_live_target(), _vault(), repo_root=tmp_path)
+    assert result.ready, result.errors
+    assert result.operational_identities == ["anonymous", "user"]
+    assert result.authenticated_identities == ["user"]
+
+
+def test_authentication_mode_legacy_and_explicit_behavior():
+    assert authentication_mode({"require_authenticated_identity": True}) == "required"
+    assert authentication_mode({}) == "optional"
+    assert authentication_mode({"authentication_mode": "anonymous-only"}) == "anonymous-only"
+
+
+def test_repository_live_targets_preflight_ready_without_session_secrets(monkeypatch):
+    repo_root = Path(__file__).resolve().parents[1]
+    targets = load_targets(repo_root / "config" / "targets.yml")
+    vault = IdentityVault.from_file(repo_root / "config" / "identities.yml")
+
+    for name in (
+        "HALO_WEB_USER_STORAGE_STATE",
+        "HALO_WEB_USER_AUTH_CHECK_URL",
+        "HALO_WEB_USER_AUTH_CHECK_CONTAINS",
+        "HALO_NETWORKSOLUTIONS_USER_STORAGE_STATE",
+        "HALO_NETWORKSOLUTIONS_USER_AUTH_CHECK_URL",
+        "HALO_NETWORKSOLUTIONS_USER_AUTH_CHECK_CONTAINS",
+        "HALO_BLUEHOST_USER_STORAGE_STATE",
+        "HALO_BLUEHOST_USER_AUTH_CHECK_URL",
+        "HALO_BLUEHOST_USER_AUTH_CHECK_CONTAINS",
+        "HALO_HOSTGATOR_USER_STORAGE_STATE",
+        "HALO_HOSTGATOR_USER_AUTH_CHECK_URL",
+        "HALO_HOSTGATOR_USER_AUTH_CHECK_CONTAINS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    live = {name: target for name, target in targets.items() if bool(target.get("live_target"))}
+    assert live, "repository should define at least one live target"
+    for name, target in live.items():
+        result = preflight_target(name, target, vault, repo_root=repo_root)
+        assert result.ready, f"{name}: {result.errors}"
+        assert result.authentication_mode == "optional"
+        assert result.operational_identities == ["anonymous"]
+        assert result.authenticated_identities == []
+        assert result.unavailable_identities
+        assert any("public-surface" in warning for warning in result.warnings)
