@@ -1,0 +1,71 @@
+schema_version: 1
+program: Minly VDP
+submission_portal: https://vdp.minly.com/
+safe_harbor: true
+
+in_scope:
+  website:
+    - name: Minly Website
+      url: https://minly.com/
+      exact_hosts:
+        - minly.com
+  ios:
+    - name: Minly iOS App
+      app_store_url: https://apps.apple.com/eg/app/minly/id1528802350
+      app_store_id: "1528802350"
+  android:
+    - name: Minly Android App
+      play_store_url: https://play.google.com/store/apps/details?id=com.minly.users&hl=en
+      package: com.minly.users
+
+account_policy:
+  own_accounts_only: true
+  access_other_user_data: forbidden
+  elevated_privilege_testing: report_first
+
+prohibited_actions:
+  - denial_of_service
+  - distributed_denial_of_service
+  - social_engineering
+  - physical_attack
+  - high_volume_automated_scanning
+  - public_disclosure_before_resolution
+
+out_of_scope_finding_types:
+  - automated_scanner_output_without_manual_impact_poc
+  - missing_security_headers_without_demonstrated_vulnerability
+  - weak_tls_without_demonstrated_vulnerability
+  - self_xss
+  - low_impact_login_logout_csrf
+  - non_sensitive_clickjacking
+  - software_version_disclosure
+  - descriptive_errors_without_exploitability
+  - jwt_valid_after_logout_expected_stateless_behavior
+  - password_policy
+  - spf_dkim_dmarc_configuration
+  - non_critical_rate_limiting_or_bruteforce
+
+mobile_out_of_scope:
+  - operating_system_vulnerabilities
+  - unlocked_device_physical_access_attacks
+  - missing_certificate_pinning_without_viable_mitm
+  - third_party_library_issue_without_minly_exploitation
+  - sandboxed_data_only_accessible_on_rooted_or_jailbroken_device
+  - lack_of_obfuscation_without_direct_exploitability
+  - lack_of_root_or_jailbreak_detection_without_direct_exploitability
+  - local_mobile_crash_or_dos_without_backend_impact
+
+stop_conditions:
+  - non_public_data_from_another_user_is_exposed
+  - testing_would_require_destructive_or_irreversible_action
+  - target_redirects_or_hands_off_to_non_minly_asset_for_the_test
+  - traffic_pattern_risks_service_degradation
+  - proof_of_concept_is_already_sufficient_to_demonstrate_impact
+
+report_requirements:
+  manual_verification: required
+  clear_security_impact: required
+  reproducible_steps: required
+  own_account_evidence: required
+  redact_secrets: required
+  redact_unrelated_user_data: required
