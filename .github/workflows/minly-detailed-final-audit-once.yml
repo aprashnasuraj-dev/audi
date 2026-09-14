@@ -1,0 +1,258 @@
+name: Minly Detailed Final Audit Once
+
+on:
+  push:
+    branches:
+      - run/minly-final-audit-20260914
+    paths:
+      - .github/workflows/minly-detailed-final-audit-once.yml
+      - programs/minly-vdp/**
+      - configs/mcp/**
+      - ai/**
+      - recon/**
+      - web/**
+      - mobile/**
+      - api/**
+      - tests/test_minly_module_gates.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minly-detailed-final-audit-once
+  cancel-in-progress: false
+
+jobs:
+  detailed-audit:
+    name: Strengthened exact-scope audit with detailed candidate report
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      MINLY_USER_STORAGE_STATE_B64: ${{ secrets.MINLY_USER_STORAGE_STATE_B64 }}
+      HALO_MINLY_USER_AUTH_CHECK_URL: ${{ secrets.HALO_MINLY_USER_AUTH_CHECK_URL }}
+      HALO_MINLY_USER_AUTH_CHECK_CONTAINS: ${{ secrets.HALO_MINLY_USER_AUTH_CHECK_CONTAINS }}
+      MINLY_MANUAL_FINDINGS_B64: ${{ secrets.MINLY_MANUAL_FINDINGS_B64 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Exact-scope zero-traffic gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install 'PyYAML==6.0.3'
+          python - <<'PY'
+          from pathlib import Path
+          import json, yaml
+          root=Path('programs/minly-vdp')
+          scope=yaml.safe_load((root/'scope.yml').read_text())
+          assert scope['in_scope']['website'][0]['url'] == 'https://minly.com/'
+          assert scope['in_scope']['website'][0]['exact_hosts'] == ['minly.com']
+          assert scope['in_scope']['android'][0]['package'] == 'com.minly.users'
+          assert scope['in_scope']['ios'][0]['app_store_id'] == '1528802350'
+          assert scope['account_policy']['own_accounts_only'] is True
+          assert scope['account_policy']['access_other_user_data'] == 'forbidden'
+          target=yaml.safe_load((root/'halo-targets.yml').read_text())['targets'][0]
+          assert target['url'] == 'https://minly.com/'
+          assert target['allow_hosts'] == ['minly.com']
+          assert '*.minly.com' in target['deny_hosts']
+          assert target['limits']['max_requests_per_second'] <= 1
+          json.loads((root/'manual-findings.schema.json').read_text())
+          print('SCOPE_GATE=PASS')
+          PY
+
+      - name: Install audit toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y apktool unzip file binutils default-jre-headless
+          python -m pip install -U pip
+          python -m pip install -e '.[all]'
+          python -m pip install 'PyYAML==6.0.3' 'androguard<5' 'mobsfscan<1' 'semgrep<2' 'detect-secrets<2' 'lief<1' 'weasyprint<70'
+          python -m playwright install --with-deps chromium
+          bash programs/minly-vdp/install_extended_toolchain.sh web
+          bash programs/minly-vdp/install_extended_toolchain.sh android
+          bash scripts/install-trivy.sh
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/build-tools" ]; then
+            bt="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+            echo "$bt" >> "$GITHUB_PATH"
+            export PATH="$bt:$PATH"
+          fi
+          python -m py_compile programs/minly-vdp/final_audit_runner.py programs/minly-vdp/final_report_maker.py programs/minly-vdp/candidate_ranker.py programs/minly-vdp/detailed_candidate_reporter.py ai/mcp-orchestrator/orchestrator.py
+          command -v apktool
+          command -v jadx
+          command -v mobsfscan
+          command -v semgrep
+          command -v detect-secrets
+          command -v gitleaks
+          command -v retire
+          command -v trivy
+
+      - name: Scoped scanning policy guardrail gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, subprocess, sys
+          def gate(command, *extra):
+              return json.loads(subprocess.check_output([sys.executable, 'ai/mcp-orchestrator/orchestrator.py', command, '--json', *extra], text=True))
+          controlled=gate('Run httpx and nuclei safe technology detection against exact-host https://minly.com/ with low-impact rate-limit')
+          assert controlled['accepted'] is True
+          ci_blocked=gate('Run httpx and nuclei safe technology detection against exact-host https://minly.com/ with low-impact rate-limit','--active','--confirm-active-test')
+          assert ci_blocked['accepted'] is False
+          assert 'ci_active_scanner_execution_disabled_use_bounded_builtin_families' in ci_blocked['blocked_reasons']
+          blocked=gate('Use ffuf and enumerate user IDs on https://minly.com/')
+          assert blocked['accepted'] is False
+          print('SCOPED_SCANNING_POLICY_GATE=PASS')
+          PY
+          pytest tests/test_minly_module_gates.py
+
+      - name: Materialize optional researcher-controlled web session
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${MINLY_USER_STORAGE_STATE_B64:-}" ]; then
+            auth_dir="${RUNNER_TEMP}/minly-auth"
+            mkdir -p "$auth_dir"
+            chmod 700 "$auth_dir"
+            path="$auth_dir/storage-state.json"
+            printf '%s' "$MINLY_USER_STORAGE_STATE_B64" | base64 --decode > "$path"
+            chmod 600 "$path"
+            python -m json.tool "$path" >/dev/null
+            echo "HALO_MINLY_USER_STORAGE_STATE=$path" >> "$GITHUB_ENV"
+            echo 'identity mode: researcher-controlled storage state available'
+          else
+            echo 'identity mode: anonymous/public-only; authenticated proof needs researcher HAR/storage-state secrets'
+          fi
+
+      - name: Run strengthened exact-host web audit families
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
+          python programs/minly-vdp/final_audit_runner.py --phase web --output artifacts/minly-final --max-pages 20 --request-budget 120 --delay-ms 1000
+
+      - name: Normalize controlled scanning manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path=Path('artifacts/minly-final/web/family-manifest.json')
+          manifest=json.loads(path.read_text())
+          families=manifest.setdefault('families', {})
+          legacy=families.pop('active-high-volume-scanners', None)
+          families['controlled-scoped-scanning']={
+            'status':'RAN',
+            'interpretation':'Scanning is allowed when exact-scope, low-rate, bounded, non-destructive, and sanitized.',
+            'runner_families':['halo-web','passive-browser-map','offline-semgrep','offline-secret-patterns','offline-gitleaks','offline-retirejs'],
+            'controls':{'exact_host':manifest.get('scope',{}).get('exact_host'),'max_pages':20,'request_budget':120,'delay_ms':1000,'stop_on_429':True,'reportability':'candidate_only_until_manual_reproduction'}
+          }
+          families['uncontrolled-high-volume-scanners']={'status':'POLICY_EXCLUDED','legacy_entry':legacy,'reason':'Uncontrolled/high-volume/off-scope/destructive/scanner-only paths remain excluded.'}
+          path.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+          print('SCOPED_SCANNING_MANIFEST_NORMALIZED=PASS')
+          PY
+
+      - name: Run Android public static audit families
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
+          python programs/minly-vdp/final_audit_runner.py --phase android-public --workdir "${RUNNER_TEMP}/minly-public-android" --output artifacts/minly-final
+
+      - name: Run iOS public metadata audit families
+        shell: bash
+        run: |
+          set -euo pipefail
+          python programs/minly-vdp/final_audit_runner.py --phase ios-public --output artifacts/minly-final
+
+      - name: Record authenticated-HAR availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/minly-final/web/authenticated-har
+          printf '%s\n' '{"status":"SKIPPED_UNLESS_SECRET_SUPPLIED","reason":"researcher-owned authenticated HAR or storage-state evidence is required for authenticated proof; this workflow does not fabricate authenticated coverage","live_target_traffic_generated":false}' > artifacts/minly-final/web/authenticated-har/status.json
+
+      - name: Materialize optional human-reviewed findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${MINLY_MANUAL_FINDINGS_B64:-}" ]; then
+            path="${RUNNER_TEMP}/manual-findings.json"
+            printf '%s' "$MINLY_MANUAL_FINDINGS_B64" | base64 --decode > "$path"
+            python -m json.tool "$path" >/dev/null
+            echo "MINLY_MANUAL_FINDINGS_PATH=$path" >> "$GITHUB_ENV"
+          fi
+
+      - name: Rank candidates and compile reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--phase compile --output artifacts/minly-final)
+          if [ -n "${MINLY_MANUAL_FINDINGS_PATH:-}" ]; then args+=(--manual-findings "$MINLY_MANUAL_FINDINGS_PATH"); fi
+          python programs/minly-vdp/final_audit_runner.py "${args[@]}"
+          weasyprint artifacts/minly-final/final-report/compiled-final-report.html artifacts/minly-final/final-report/compiled-final-report.pdf
+          python programs/minly-vdp/detailed_candidate_reporter.py --root artifacts/minly-final --output artifacts/minly-final/detailed-candidate-report --run-id "${GITHUB_RUN_ID}"
+
+      - name: Final detailed report integrity gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('artifacts/minly-final')
+          web=json.loads((root/'web/family-manifest.json').read_text())
+          assert web['scope']['url'] == 'https://minly.com/'
+          assert web['scope']['exact_host'] == 'minly.com'
+          assert web['families']['controlled-scoped-scanning']['status'] == 'RAN'
+          assert web['families']['uncontrolled-high-volume-scanners']['status'] == 'POLICY_EXCLUDED'
+          android=json.loads((root/'android/summary.json').read_text())
+          assert android.get('observed_package') == 'com.minly.users'
+          ios=json.loads((root/'ios/summary.json').read_text())
+          assert ios.get('app_store_id') == '1528802350'
+          ranked=json.loads((root/'candidate-review/candidate-priority.json').read_text())
+          detail=json.loads((root/'detailed-candidate-report/detailed-vulnerability-candidates.json').read_text())
+          assert ranked['policy']['automated_output_is_not_a_finding'] is True
+          assert detail['candidate_count'] == ranked.get('candidate_count')
+          assert detail['policy']['candidate_not_final_finding'] is True
+          assert detail['policy']['manual_owned_account_reproduction_required'] is True
+          print('FINAL_DETAILED_AUDIT_GATE=PASS')
+          print('CANDIDATE_COUNT=', detail['candidate_count'])
+          print('VERIFIED_SUBMISSION_COUNT=', ranked.get('submission_ready_count'))
+          PY
+          test -s artifacts/minly-final/final-report/compiled-final-report.pdf
+          test -s artifacts/minly-final/detailed-candidate-report/detailed-vulnerability-candidates.pdf
+          test -s artifacts/minly-final/detailed-candidate-report/detailed-vulnerability-candidates.md
+          test -s artifacts/minly-final/detailed-candidate-report/detailed-vulnerability-candidates.json
+
+      - name: Sanitize proprietary and ephemeral material
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "${RUNNER_TEMP}/minly-auth" "${RUNNER_TEMP}/minly-public-android"
+          rm -f "${RUNNER_TEMP}/manual-findings.json"
+          rm -rf artifacts/minly-final/android/decoded artifacts/minly-final/android/jadx
+          rm -f artifacts/minly-final/android/binary-strings.txt
+          rm -rf artifacts/minly-final/web/passive/_temp_js
+          rm -f artifacts/minly-final/web/passive/semgrep-raw.json artifacts/minly-final/web/passive/detect-secrets-raw.json artifacts/minly-final/web/passive/gitleaks-raw.json
+
+      - name: Upload strengthened detailed audit bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: minly-detailed-final-audit-${{ github.run_id }}
+          path: artifacts/minly-final/
+          if-no-files-found: warn
+          retention-days: 30
