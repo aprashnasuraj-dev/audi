@@ -45,6 +45,8 @@ jobs:
               'SUBMISSION_TEMPLATE.md',
               'WORKLOG_TEMPLATE.md',
               'CONFIDENTIALITY.md',
+              'RESEARCH_PLAN.md',
+              'SUBMISSION_SCORECARD.md',
           ]
           missing = [name for name in required if not (root / name).is_file()]
           if missing:
