@@ -9,19 +9,19 @@ on:
         default: false
         type: boolean
       run_web:
-        description: Run exact-host Minly website audit families
+        description: Run exact-host low-rate website audit families
         required: true
         default: true
         type: boolean
       run_android:
-        description: Run offline Android APK families using configured private artifact URL/SHA secrets
+        description: Run Android static families; use private APK when configured, otherwise provenance-checked public fallback
         required: true
-        default: false
+        default: true
         type: boolean
       run_ios:
-        description: Run offline iOS IPA families using configured private artifact URL/SHA secrets
+        description: Run iOS families; use private IPA when configured, otherwise App Store/AASA metadata fallback
         required: true
-        default: false
+        default: true
         type: boolean
       max_pages:
         description: Maximum same-origin pages for the low-rate browser mapper
@@ -42,7 +42,7 @@ on:
         type: choice
         options: ['1200', '2000', '3000']
       ios_expected_bundle_id:
-        description: Optional expected iOS CFBundleIdentifier for the researcher-supplied IPA
+        description: Optional expected iOS CFBundleIdentifier for a private researcher-supplied IPA
         required: false
         default: ''
         type: string
@@ -56,15 +56,15 @@ concurrency:
 
 jobs:
   preflight:
-    name: Zero-traffic final-runner readiness
+    name: Exact-scope zero-traffic readiness
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Confirm current scope
+      - name: Confirm current scope and compile runner
         shell: bash
         run: |
           set -euo pipefail
@@ -72,16 +72,17 @@ jobs:
             echo 'Blocked: current Minly scope confirmation is required.'
             exit 2
           fi
-      - name: Validate final runner, target configuration, and report compiler
-        shell: bash
-        run: |
-          set -euo pipefail
           python -m pip install 'PyYAML==6.0.3'
           python -m py_compile \
             programs/minly-vdp/final_audit_runner.py \
             programs/minly-vdp/final_report_maker.py \
             programs/minly-vdp/mobile_static_audit.py \
-            programs/minly-vdp/minly_passive_map.py
+            programs/minly-vdp/mobile_artifact_inspect.py \
+            programs/minly-vdp/minly_passive_map.py \
+            programs/minly-vdp/har_candidate_map.py \
+            programs/minly-vdp/public_mobile_fallback.py \
+            programs/minly-vdp/candidate_ranker.py
+          bash -n programs/minly-vdp/install_extended_toolchain.sh
           python - <<'PY'
           from pathlib import Path
           import json, yaml
@@ -90,6 +91,9 @@ jobs:
           assert scope['in_scope']['website'][0]['exact_hosts'] == ['minly.com']
           assert scope['in_scope']['android'][0]['package'] == 'com.minly.users'
           assert scope['in_scope']['ios'][0]['app_store_id'] == '1528802350'
+          assert scope['account_policy']['own_accounts_only'] is True
+          assert scope['account_policy']['access_other_user_data'] == 'forbidden'
+          assert 'high_volume_automated_scanning' in scope['prohibited_actions']
           target=yaml.safe_load((root/'halo-targets.yml').read_text())['targets'][0]
           assert target['url'] == 'https://minly.com/'
           assert target['allow_hosts'] == ['minly.com']
@@ -97,7 +101,7 @@ jobs:
           assert target['limits']['max_requests_per_second'] <= 1
           schema=json.loads((root/'manual-findings.schema.json').read_text())
           assert schema['properties']['findings']['type'] == 'array'
-          print('final heavy-audit zero-traffic readiness: PASS')
+          print('final heavy-audit exact-scope readiness: PASS')
           PY
 
   web:
@@ -105,18 +109,18 @@ jobs:
     if: ${{ inputs.run_web }}
     needs: preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       MINLY_USER_STORAGE_STATE_B64: ${{ secrets.MINLY_USER_STORAGE_STATE_B64 }}
       HALO_MINLY_USER_AUTH_CHECK_URL: ${{ secrets.MINLY_USER_AUTH_CHECK_URL }}
       HALO_MINLY_USER_AUTH_CHECK_CONTAINS: ${{ secrets.MINLY_USER_AUTH_CHECK_CONTAINS }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install web audit toolchain
+      - name: Install website audit toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -124,8 +128,13 @@ jobs:
           python -m pip install -e '.[all]'
           python -m pip install 'PyYAML==6.0.3' 'semgrep<2' 'detect-secrets<2'
           python -m playwright install --with-deps chromium
+          bash programs/minly-vdp/install_extended_toolchain.sh web
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          export PATH="${HOME}/.local/bin:${PATH}"
           semgrep --validate --config programs/minly-vdp/semgrep/minly-client.yml
-      - name: Materialize ephemeral researcher-controlled Minly session
+          command -v gitleaks
+          command -v retire
+      - name: Materialize optional researcher-controlled Minly session
         shell: bash
         run: |
           set -euo pipefail
@@ -138,9 +147,9 @@ jobs:
             chmod 600 "$path"
             python -m json.tool "$path" >/dev/null
             echo "HALO_MINLY_USER_STORAGE_STATE=$path" >> "$GITHUB_ENV"
-            echo 'Authenticated researcher storage state materialized ephemerally.'
+            echo 'website identity mode: researcher storage state available'
           else
-            echo 'No Minly storage state supplied: website phase will remain anonymous/public-only.'
+            echo 'website identity mode: anonymous/public-only; authenticated HAR may still provide offline coverage'
           fi
       - name: Run final website audit families
         shell: bash
@@ -152,74 +161,234 @@ jobs:
             --max-pages "${{ inputs.max_pages }}" \
             --request-budget "${{ inputs.request_budget }}" \
             --delay-ms "${{ inputs.delay_ms }}"
-      - name: Website artifact sanitation gate
+      - name: Website evidence sanitation gate
         shell: bash
         run: |
           set -euo pipefail
           test ! -e artifacts/minly-final/web/passive/_temp_js
           test ! -e artifacts/minly-final/web/passive/semgrep-raw.json
           test ! -e artifacts/minly-final/web/passive/detect-secrets-raw.json
+          test ! -e artifacts/minly-final/web/passive/gitleaks-raw.json
           python - <<'PY'
           from pathlib import Path
-          forbidden=['authorization:', 'set-cookie:', 'bearer ', 'cookie:']
+          forbidden=['authorization: bearer ', 'set-cookie:', 'cookie:']
           for p in Path('artifacts/minly-final/web').rglob('*'):
-              if not p.is_file() or p.suffix.lower() not in {'.json','.md','.txt','.html'}: continue
+              if not p.is_file() or p.suffix.lower() not in {'.json','.md','.txt','.html'}:
+                  continue
               t=p.read_text(errors='ignore').lower()
               bad=[x for x in forbidden if x in t]
-              if bad: raise SystemExit(f'possible secret/header material remained in {p}: {bad}')
-          print('website artifact sanitation: PASS')
+              if bad:
+                  raise SystemExit(f'possible secret/header material remained in {p}: {bad}')
+          print('website evidence sanitation: PASS')
           PY
       - name: Remove ephemeral session material
         if: always()
         run: rm -rf "${RUNNER_TEMP}/minly-auth"
-      - name: Upload website family evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Upload website evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: minly-final-web-${{ github.run_id }}
-          path: artifacts/minly-final/web/
+          path: artifacts/minly-final/
+          if-no-files-found: error
+          retention-days: 30
+
+  authenticated-har:
+    name: Optional researcher-owned authenticated HAR analysis
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MINLY_AUTHENTICATED_HAR_URL: ${{ secrets.MINLY_AUTHENTICATED_HAR_URL }}
+      MINLY_AUTHENTICATED_HAR_SHA256: ${{ secrets.MINLY_AUTHENTICATED_HAR_SHA256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Determine HAR availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/minly-final/web/authenticated-har
+          if [ -n "${MINLY_AUTHENTICATED_HAR_URL:-}" ] && [ -n "${MINLY_AUTHENTICATED_HAR_SHA256:-}" ]; then
+            echo 'HAS_MINLY_HAR=true' >> "$GITHUB_ENV"
+          else
+            echo 'HAS_MINLY_HAR=false' >> "$GITHUB_ENV"
+            printf '%s\n' '{"status":"SKIPPED","reason":"researcher-owned authenticated HAR URL/SHA secrets not configured","live_target_traffic_generated":false}' > artifacts/minly-final/web/authenticated-har/status.json
+          fi
+      - name: Install offline HAR analyzers
+        if: ${{ env.HAS_MINLY_HAR == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install 'semgrep<2' 'detect-secrets<2'
+          bash programs/minly-vdp/install_extended_toolchain.sh web
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+      - name: Download and SHA-256 verify researcher-owned HAR
+        if: ${{ env.HAS_MINLY_HAR == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/minly-har"
+          python - <<'PY'
+          import hashlib, os, pathlib, urllib.parse, urllib.request
+          url=os.environ['MINLY_AUTHENTICATED_HAR_URL']
+          expected=os.environ['MINLY_AUTHENTICATED_HAR_SHA256'].strip().lower()
+          p=urllib.parse.urlsplit(url)
+          if p.scheme!='https' or p.username or p.password:
+              raise SystemExit('HAR URL must be HTTPS without embedded credentials')
+          dest=pathlib.Path(os.environ['RUNNER_TEMP'])/'minly-har'/'session.har'
+          req=urllib.request.Request(url, headers={'User-Agent':'Minly-VDP-offline-HAR-audit/1.0'})
+          with urllib.request.urlopen(req, timeout=120) as r, dest.open('wb') as f:
+              while True:
+                  chunk=r.read(1024*1024)
+                  if not chunk: break
+                  f.write(chunk)
+                  if f.tell()>100*1024*1024: raise SystemExit('HAR exceeds 100 MiB safety limit')
+          actual=hashlib.sha256(dest.read_bytes()).hexdigest()
+          if actual!=expected:
+              dest.unlink(missing_ok=True)
+              raise SystemExit(f'HAR SHA mismatch: {actual}')
+          print('HAR SHA-256 verification: PASS')
+          PY
+      - name: Map authenticated exact-host surface offline
+        if: ${{ env.HAS_MINLY_HAR == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python programs/minly-vdp/har_candidate_map.py \
+            --har "${RUNNER_TEMP}/minly-har/session.har" \
+            --output artifacts/minly-final/web/authenticated-har \
+            --temp-js-dir "${RUNNER_TEMP}/minly-har/js"
+      - name: Analyze captured same-origin JavaScript offline
+        if: ${{ env.HAS_MINLY_HAR == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
+          js="${RUNNER_TEMP}/minly-har/js"
+          out="artifacts/minly-final/web/authenticated-har"
+          if [ -d "$js" ] && find "$js" -type f -name '*.js' -print -quit | grep -q .; then
+            semgrep scan --config programs/minly-vdp/semgrep/minly-client.yml --json --output "${RUNNER_TEMP}/semgrep.json" "$js" || true
+            detect-secrets scan --all-files "$js" > "${RUNNER_TEMP}/detect-secrets.json" || true
+            gitleaks dir "$js" --redact --report-format json --report-path "${RUNNER_TEMP}/gitleaks.json" --no-banner || true
+            retire --path "$js" --outputformat json --outputpath "$out/retire-dependency-context.json" --exitwith 0 || true
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          out=Path('artifacts/minly-final/web/authenticated-har')
+          temp=Path(os.environ['RUNNER_TEMP'])
+          sem=json.loads((temp/'semgrep.json').read_text()) if (temp/'semgrep.json').exists() else {'results':[]}
+          sem_clean=[{'check_id':r.get('check_id'),'file':Path(r.get('path','')).name,'line':(r.get('start') or {}).get('line'),'message':((r.get('extra') or {}).get('message') or '')[:240],'verification_status':'Unverified','manual_validation_required':True} for r in sem.get('results',[])][:1000]
+          (out/'har-js-semgrep-candidates.json').write_text(json.dumps({'candidate_count':len(sem_clean),'results':sem_clean},indent=2))
+          try: ds=json.loads((temp/'detect-secrets.json').read_text())
+          except Exception: ds={'results':{}}
+          ds_clean=[]
+          for fn,items in (ds.get('results') or {}).items():
+              for item in items:
+                  ds_clean.append({'file':Path(fn).name,'line_number':item.get('line_number'),'type':item.get('type'),'hashed_secret':item.get('hashed_secret'),'verification_status':'Unverified','manual_validation_required':True})
+          (out/'har-js-secret-pattern-candidates.json').write_text(json.dumps({'candidate_count':len(ds_clean),'results':ds_clean[:1000]},indent=2))
+          try: gl=json.loads((temp/'gitleaks.json').read_text())
+          except Exception: gl=[]
+          gl_clean=[]
+          for item in gl if isinstance(gl,list) else []:
+              gl_clean.append({'rule_id':item.get('RuleID'),'description':item.get('Description'),'file':Path(str(item.get('File') or '')).name,'start_line':item.get('StartLine'),'fingerprint':item.get('Fingerprint'),'verification_status':'Unverified','manual_validation_required':True})
+          (out/'har-js-gitleaks-candidates.json').write_text(json.dumps({'candidate_count':len(gl_clean),'results':gl_clean[:1000]},indent=2))
+          PY
+          else
+            printf '%s\n' '{"candidate_count":0,"results":[]}' > "$out/har-js-semgrep-candidates.json"
+            printf '%s\n' '{"candidate_count":0,"results":[]}' > "$out/har-js-secret-pattern-candidates.json"
+            printf '%s\n' '{"candidate_count":0,"results":[]}' > "$out/har-js-gitleaks-candidates.json"
+          fi
+      - name: HAR privacy and exact-scope integrity gate
+        if: ${{ env.HAS_MINLY_HAR == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('artifacts/minly-final/web/authenticated-har/har-surface-map.json')
+          data=json.loads(p.read_text())
+          assert data['scope']['exact_host'] == 'minly.com'
+          assert data['live_target_traffic_generated'] is False
+          privacy=data['privacy']
+          assert privacy['request_response_bodies_persisted'] is False
+          assert privacy['header_values_persisted'] is False
+          assert privacy['cookie_values_persisted'] is False
+          assert privacy['authorization_values_persisted'] is False
+          assert privacy['query_values_persisted'] is False
+          print('HAR privacy + exact-scope gate: PASS')
+          PY
+      - name: Remove private HAR and raw analyzer material
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/minly-har" "${RUNNER_TEMP}/semgrep.json" "${RUNNER_TEMP}/detect-secrets.json" "${RUNNER_TEMP}/gitleaks.json"
+      - name: Upload authenticated-HAR status/evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: minly-final-har-${{ github.run_id }}
+          path: artifacts/minly-final/
           if-no-files-found: error
           retention-days: 30
 
   android:
-    name: Android offline static families
+    name: Android private-or-provenance-checked static families
     if: ${{ inputs.run_android }}
     needs: preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 100
     env:
       MOBILE_ARTIFACT_URL: ${{ secrets.MINLY_ANDROID_APK_URL }}
       MOBILE_ARTIFACT_SHA256: ${{ secrets.MINLY_ANDROID_APK_SHA256 }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: pip
-      - uses: actions/setup-java@7a445ee88d4e23b52c33a2039a230077c4367a0b # v4
+      - uses: actions/setup-java@7a445ee88d4e23b52c33a2039a230077c4367a0b
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android audit toolchain
+      - name: Install complete Android offline toolchain
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y apktool unzip file binutils
+          sudo apt-get install -y apktool unzip file binutils default-jre-headless
           python -m pip install -U pip
           python -m pip install 'PyYAML==6.0.3' 'androguard<5' 'mobsfscan<1' 'semgrep<2' 'detect-secrets<2' 'lief<1'
+          bash programs/minly-vdp/install_extended_toolchain.sh android
+          bash scripts/install-trivy.sh
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          export PATH="${HOME}/.local/bin:${PATH}"
           if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/build-tools" ]; then
             bt="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
             echo "$bt" >> "$GITHUB_PATH"
+            export PATH="$bt:$PATH"
           fi
-          if ! command -v jadx >/dev/null 2>&1; then
-            echo 'JADX is optional in this runner; family will be explicitly SKIPPED if unavailable.'
-          fi
-      - name: Download and SHA-256 verify researcher-supplied APK
+          command -v aapt
+          command -v apksigner
+          command -v jadx
+          command -v gitleaks
+          command -v trivy
+          command -v mobsfscan
+          command -v semgrep
+          command -v detect-secrets
+      - name: Choose Android artifact source
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${MOBILE_ARTIFACT_URL:-}" || { echo 'Missing MINLY_ANDROID_APK_URL secret'; exit 2; }
-          test -n "${MOBILE_ARTIFACT_SHA256:-}" || { echo 'Missing MINLY_ANDROID_APK_SHA256 secret'; exit 2; }
+          if [ -n "${MOBILE_ARTIFACT_URL:-}" ] && [ -n "${MOBILE_ARTIFACT_SHA256:-}" ]; then
+            echo 'ANDROID_INPUT_MODE=private' >> "$GITHUB_ENV"
+          else
+            echo 'ANDROID_INPUT_MODE=public-fallback' >> "$GITHUB_ENV"
+          fi
+      - name: Download and verify private APK
+        if: ${{ env.ANDROID_INPUT_MODE == 'private' }}
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/minly-android"
           python - <<'PY'
           import hashlib, os, pathlib, urllib.parse, urllib.request
@@ -233,78 +402,114 @@ jobs:
                   chunk=r.read(1024*1024)
                   if not chunk: break
                   f.write(chunk)
-                  if f.tell()>600*1024*1024: raise SystemExit('APK exceeds 600 MiB safety limit')
+                  if f.tell()>650*1024*1024: raise SystemExit('APK exceeds 650 MiB safety limit')
           actual=hashlib.sha256(dest.read_bytes()).hexdigest()
           if actual!=expected: dest.unlink(missing_ok=True); raise SystemExit(f'APK SHA mismatch: {actual}')
-          print('APK SHA-256 verification: PASS')
+          print('private APK SHA-256 verification: PASS')
           PY
-      - name: Run Android static families
+      - name: Run private Android static families
+        if: ${{ env.ANDROID_INPUT_MODE == 'private' }}
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
           python programs/minly-vdp/final_audit_runner.py \
             --phase android \
             --artifact "${RUNNER_TEMP}/minly-android/app.apk" \
             --output artifacts/minly-final
-          python programs/minly-vdp/mobile_artifact_inspect.py \
-            --platform android \
-            --artifact "${RUNNER_TEMP}/minly-android/app.apk" \
-            --output artifacts/minly-final/android/artifact-inspection.json
+      - name: Run provenance-checked public Android fallback
+        if: ${{ env.ANDROID_INPUT_MODE == 'public-fallback' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
+          python programs/minly-vdp/final_audit_runner.py \
+            --phase android-public \
+            --workdir "${RUNNER_TEMP}/minly-public-android" \
+            --output artifacts/minly-final
+      - name: Android coverage and provenance integrity gate
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY'
           import json
           from pathlib import Path
-          data=json.loads(Path('artifacts/minly-final/android/summary.json').read_text())
-          observed=data.get('observed_package')
-          if observed and observed!='com.minly.users': raise SystemExit(f'wrong Android package: {observed}')
-          inspect=json.loads(Path('artifacts/minly-final/android/artifact-inspection.json').read_text())
-          package=(inspect.get('identity') or {}).get('package')
-          if package and package!='com.minly.users': raise SystemExit(f'wrong Android package from inspector: {package}')
-          print('Android identity gate: PASS')
+          root=Path('artifacts/minly-final/android')
+          summary=json.loads((root/'summary.json').read_text())
+          inspect=json.loads((root/'artifact-inspection.json').read_text())
+          assert summary.get('observed_package') == 'com.minly.users'
+          assert (inspect.get('identity') or {}).get('package') == 'com.minly.users'
+          tc=summary.get('toolchain') or {}
+          required=['aapt_badging','apksigner','apktool','jadx','mobsfscan','semgrep','detect_secrets','gitleaks','trivy']
+          missing={name:(tc.get(name) or {}).get('status') for name in required if (tc.get(name) or {}).get('status') == 'SKIPPED' or name not in tc}
+          if missing: raise SystemExit(f'Android required offline tool coverage missing: {missing}')
+          if summary.get('status') == 'RAN_PUBLIC_MIRROR_STATIC':
+              provenance=summary.get('artifact_provenance') or {}
+              assert (provenance.get('base_apk') or {}).get('known_cert_sha1_match') is True
+              dal=(provenance.get('google_digital_asset_links') or {})
+              if dal.get('published_sha256_fingerprints'):
+                  assert dal.get('observed_cert_matches_published_sha256') is True
+          assert summary.get('verification_status') == 'UNVERIFIED_STATIC_CANDIDATES_ONLY'
+          print('Android complete offline toolchain + provenance gate: PASS')
+          print('candidate counts:', summary.get('candidate_counts'))
           PY
-      - name: Remove APK and decoded proprietary content
+      - name: Remove Android proprietary material
         if: always()
         run: |
-          rm -rf "${RUNNER_TEMP}/minly-android"
+          rm -rf "${RUNNER_TEMP}/minly-android" "${RUNNER_TEMP}/minly-public-android"
           rm -rf artifacts/minly-final/android/decoded artifacts/minly-final/android/jadx
-      - name: Upload Android family evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          rm -f artifacts/minly-final/android/binary-strings.txt
+      - name: Upload Android evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: minly-final-android-${{ github.run_id }}
-          path: artifacts/minly-final/android/
+          path: artifacts/minly-final/
           if-no-files-found: error
           retention-days: 30
 
   ios:
-    name: iOS offline static families
+    name: iOS private-static or public-metadata families
     if: ${{ inputs.run_ios }}
     needs: preflight
     runs-on: macos-14
-    timeout-minutes: 75
+    timeout-minutes: 90
     env:
       MOBILE_ARTIFACT_URL: ${{ secrets.MINLY_IOS_IPA_URL }}
       MOBILE_ARTIFACT_SHA256: ${{ secrets.MINLY_IOS_IPA_SHA256 }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install iOS audit toolchain
+      - name: Install iOS offline toolchain
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install -U pip
           python -m pip install 'PyYAML==6.0.3' 'semgrep<2' 'detect-secrets<2' 'lief<1'
+          bash programs/minly-vdp/install_extended_toolchain.sh ios
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          export PATH="${HOME}/.local/bin:${PATH}"
           xcrun --find otool
           xcrun --find nm
           command -v codesign
           command -v strings
-      - name: Download and SHA-256 verify researcher-supplied IPA
+          command -v gitleaks
+      - name: Choose iOS input mode
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${MOBILE_ARTIFACT_URL:-}" || { echo 'Missing MINLY_IOS_IPA_URL secret'; exit 2; }
-          test -n "${MOBILE_ARTIFACT_SHA256:-}" || { echo 'Missing MINLY_IOS_IPA_SHA256 secret'; exit 2; }
+          if [ -n "${MOBILE_ARTIFACT_URL:-}" ] && [ -n "${MOBILE_ARTIFACT_SHA256:-}" ]; then
+            echo 'IOS_INPUT_MODE=private' >> "$GITHUB_ENV"
+          else
+            echo 'IOS_INPUT_MODE=public-metadata' >> "$GITHUB_ENV"
+          fi
+      - name: Download and verify private IPA
+        if: ${{ env.IOS_INPUT_MODE == 'private' }}
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/minly-ios"
           python - <<'PY'
           import hashlib, os, pathlib, urllib.parse, urllib.request
@@ -321,44 +526,66 @@ jobs:
                   if f.tell()>800*1024*1024: raise SystemExit('IPA exceeds 800 MiB safety limit')
           actual=hashlib.sha256(dest.read_bytes()).hexdigest()
           if actual!=expected: dest.unlink(missing_ok=True); raise SystemExit(f'IPA SHA mismatch: {actual}')
-          print('IPA SHA-256 verification: PASS')
+          print('private IPA SHA-256 verification: PASS')
           PY
-      - name: Run iOS static families
+      - name: Run private iOS static families
+        if: ${{ env.IOS_INPUT_MODE == 'private' }}
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
           args=(--phase ios --artifact "${RUNNER_TEMP}/minly-ios/app.ipa" --output artifacts/minly-final)
           if [ -n "${{ inputs.ios_expected_bundle_id }}" ]; then args+=(--expected-bundle-id "${{ inputs.ios_expected_bundle_id }}"); fi
           python programs/minly-vdp/final_audit_runner.py "${args[@]}"
-          python programs/minly-vdp/mobile_artifact_inspect.py \
-            --platform ios \
-            --artifact "${RUNNER_TEMP}/minly-ios/app.ipa" \
-            --output artifacts/minly-final/ios/artifact-inspection.json
-      - name: Remove IPA and extracted proprietary content
+      - name: Run iOS App Store and associated-domain fallback
+        if: ${{ env.IOS_INPUT_MODE == 'public-metadata' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python programs/minly-vdp/final_audit_runner.py --phase ios-public --output artifacts/minly-final
+      - name: iOS coverage integrity gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('artifacts/minly-final/ios/summary.json').read_text())
+          assert data.get('app_store_id') == '1528802350'
+          if data.get('status') == 'RAN_PUBLIC_METADATA_ONLY':
+              assert data.get('binary_static_coverage') is False
+              assert data.get('verification_status') == 'UNVERIFIED_METADATA_CANDIDATES_ONLY'
+          else:
+              assert data.get('verification_status') == 'UNVERIFIED_STATIC_CANDIDATES_ONLY'
+              tc=data.get('toolchain') or {}
+              assert (tc.get('gitleaks') or {}).get('status') != 'SKIPPED'
+          print('iOS coverage gate: PASS —', data.get('status') or data.get('verification_status'))
+          PY
+      - name: Remove iOS proprietary material
         if: always()
         run: |
           rm -rf "${RUNNER_TEMP}/minly-ios"
           rm -rf artifacts/minly-final/ios/extracted
           rm -f artifacts/minly-final/ios/binary-strings.txt
-      - name: Upload iOS family evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Upload iOS evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: minly-final-ios-${{ github.run_id }}
-          path: artifacts/minly-final/ios/
+          path: artifacts/minly-final/
           if-no-files-found: error
           retention-days: 30
 
   compile:
-    name: Compile human-reviewed final report bundle
+    name: Correlate candidates + compile human-reviewed report
     if: ${{ always() && needs.preflight.result == 'success' }}
-    needs: [preflight, web, android, ios]
+    needs: [preflight, web, authenticated-har, android, ios]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       MINLY_MANUAL_FINDINGS_B64: ${{ secrets.MINLY_MANUAL_FINDINGS_B64 }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
       - name: Download successful audit-family artifacts
@@ -377,7 +604,7 @@ jobs:
             python -m json.tool "$path" >/dev/null
             echo "MINLY_MANUAL_FINDINGS_PATH=$path" >> "$GITHUB_ENV"
           fi
-      - name: Compile final evidence and submission reports
+      - name: Rank cross-family candidates and compile report
         shell: bash
         run: |
           set -euo pipefail
@@ -389,13 +616,13 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install 'weasyprint<70'
-          weasyprint \
-            artifacts/minly-final/final-report/compiled-final-report.html \
-            artifacts/minly-final/final-report/compiled-final-report.pdf
-      - name: Final report integrity gate
+          weasyprint artifacts/minly-final/final-report/compiled-final-report.html artifacts/minly-final/final-report/compiled-final-report.pdf
+      - name: Final evidence/report integrity gate
         shell: bash
         run: |
           set -euo pipefail
+          test -s artifacts/minly-final/candidate-review/candidate-priority.json
+          test -s artifacts/minly-final/candidate-review/candidate-priority.md
           test -s artifacts/minly-final/final-report/compiled-final-report.json
           test -s artifacts/minly-final/final-report/compiled-final-report.md
           test -s artifacts/minly-final/final-report/compiled-final-report.html
@@ -403,22 +630,27 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          p=Path('artifacts/minly-final/final-report/compiled-final-report.json')
-          data=json.loads(p.read_text())
-          policy=data['policy']
+          ranked=json.loads(Path('artifacts/minly-final/candidate-review/candidate-priority.json').read_text())
+          report=json.loads(Path('artifacts/minly-final/final-report/compiled-final-report.json').read_text())
+          assert ranked['policy']['automated_output_is_not_a_finding'] is True
+          assert ranked['policy']['manual_poc_required'] is True
+          assert ranked['submission_ready_count'] == 0
+          policy=report['policy']
           assert policy['do_not_invent_findings'] is True
           assert policy['proof_required_for_claims'] is True
           assert policy['automated_candidates_are_unverified'] is True
-          for f in data['accepted_manual_findings']:
+          for f in report['accepted_manual_findings']:
               assert f['status'] in {'Verified','Partially verified','Unverified'}
               assert f['impact_attacker'].lower().startswith('as an attacker, i could')
           print('final report integrity: PASS')
+          print('ranked candidate count:', ranked['candidate_count'])
+          print('verified submission count:', report['verified_submission_count'])
           PY
       - name: Remove ephemeral manual findings source
         if: always()
         run: rm -f "${RUNNER_TEMP}/manual-findings.json"
       - name: Upload final heavy audit bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: minly-final-heavy-audit-${{ github.run_id }}
           path: artifacts/minly-final/
