@@ -11,8 +11,8 @@ from ..integrity import finalize_accounting
 from ..models import CoverageRecord, FamilyStatus, Finding, ResultAccounting
 
 _FIELD = re.compile(r"^\s*([_A-Za-z][_0-9A-Za-z]*)\s*(?:\([^)]*\))?\s*:", re.M)
-_TYPE_BLOCK = re.compile(r"type\s+(Query|Mutation)\s*\{(.*?)\}", re.S)
-_OPERATION = re.compile(r"\b(?:query|mutation)\s+([_A-Za-z][_0-9A-Za-z]*)")
+_TYPE_BLOCK = re.compile(r"type\s+(Query|Mutation|Subscription)\s*\{(.*?)\}", re.S)
+_OPERATION = re.compile(r"\b(?:query|mutation|subscription)\s+([_A-Za-z][_0-9A-Za-z]*)")
 _ROOT_FIELD = re.compile(r"\{\s*([_A-Za-z][_0-9A-Za-z]*)")
 
 
@@ -63,10 +63,11 @@ class GraphQLSchemaAdapter(VaultBoundAdapter):
             text = schema_path.read_text(encoding="utf-8")
             roots = _schema_roots(text)
             if not roots:
-                raise ValueError("GraphQL schema defines no Query/Mutation root fields")
+                raise ValueError("GraphQL schema defines no Query/Mutation/Subscription root fields")
             findings: list[Finding] = []
             observed = 0
             raw_candidates = 0
+            seen: set[tuple[str, str, str, str]] = set()
             for identity in selected:
                 payload = (ctx.get("discovered") or {}).get(identity.name) or {}
                 for request in payload.get("requests", []):
@@ -74,9 +75,14 @@ class GraphQLSchemaAdapter(VaultBoundAdapter):
                     path = (urlsplit(url).path or "").lower()
                     if "graphql" not in path:
                         continue
-                    operation = _observed_operation(url)
-                    if operation is None:
+                    method = str(request.get("method", "GET")).upper()
+                    operation = str(request.get("graphql_operation") or "") or _observed_operation(url)
+                    if not operation:
                         continue
+                    key = (identity.name, method, url, operation)
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     observed += 1
                     if operation in roots:
                         continue
@@ -92,14 +98,16 @@ class GraphQLSchemaAdapter(VaultBoundAdapter):
                         confidence=85,
                         evidence_grade="direct",
                         evidence={
-                            "method": str(request.get("method", "GET")).upper(),
+                            "method": method,
                             "schema": str(target["graphql_schema"]),
                             "operation": operation,
+                            "captured_request": True,
+                            "request_body_retained": False,
                         },
                     ))
             coverage.tools_executed = 1
             coverage.findings = len(findings)
-            coverage.metadata.update({"schema_root_fields": len(roots), "observed_get_operations": observed})
+            coverage.metadata.update({"schema_root_fields": len(roots), "observed_operations": observed})
             finalize_accounting(coverage, ResultAccounting(
                 raw_result_count=raw_candidates,
                 normalized_count=len(findings),
