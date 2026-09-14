@@ -7,9 +7,10 @@ from urllib.parse import urlsplit
 from .base import VaultBoundAdapter
 from ..identity import IdentityVault
 from ..integrity import finalize_accounting
+from ..live_safety import live_safety
 from ..models import CoverageRecord, FamilyStatus, Finding, ResultAccounting
 from ..replay import CapturedRequest, ReplayTransport
-from ..scope import ScopeGuard
+from ..scope import ScopePolicy
 
 
 class ReplayRuntimeAdapter(VaultBoundAdapter):
@@ -52,13 +53,27 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
             coverage.reason = "browser discovery produced no replayable GET/HEAD requests"
             return [], coverage
 
-        guard = ScopeGuard(tuple(target["allow_hosts"]))
-        replay = ReplayTransport(guard, timeout=float(target.get("limits", {}).get("timeout_seconds", 10)))
+        policy = ctx.get("_scope_policy")
+        if policy is None:
+            policy = ScopePolicy.from_target(target)
+            ctx["_scope_policy"] = policy
+        if not isinstance(policy, ScopePolicy):
+            coverage.status = FamilyStatus.FAILED
+            coverage.reason = "invalid scope policy in runtime context"
+            return [], coverage
+
+        replay = ReplayTransport(
+            policy,
+            timeout=float(target.get("limits", {}).get("timeout_seconds", 10)),
+            safety=live_safety(ctx, target),
+        )
         configured_budget = int(target.get("limits", {}).get("request_budget", 250))
         remaining = int(ctx.setdefault("request_budget_remaining", configured_budget))
         findings: list[Finding] = []
         seen_authz: set[tuple[str, str]] = set()
         comparisons_completed = 0
+        excluded_nonmaterial = 0
+        raw_candidates = 0
         try:
             for identity_a, identity_b in combinations(selected, 2):
                 for (method, url), _item in sorted(request_index.items()):
@@ -72,8 +87,17 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                             "request_budget_remaining": remaining,
                         })
                         ctx["request_budget_remaining"] = remaining
-                        finalize_accounting(coverage, ResultAccounting(len(findings), len(findings), 0))
+                        finalize_accounting(coverage, ResultAccounting(
+                            raw_result_count=raw_candidates,
+                            normalized_count=len(findings),
+                            excluded_count=excluded_nonmaterial,
+                            exclusion_reasons=(
+                                {"volatile-or-nonmaterial-response-difference": excluded_nonmaterial}
+                                if excluded_nonmaterial else {}
+                            ),
+                        ))
                         return findings, coverage
+
                     diff = await replay.compare(
                         CapturedRequest(method=method, url=url, headers={}),
                         identity_a,
@@ -88,6 +112,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                                 key = (identity.name, url)
                                 if key not in seen_authz:
                                     seen_authz.add(key)
+                                    raw_candidates += 1
                                     findings.append(Finding(
                                         tool=self.name,
                                         family=self.family,
@@ -103,16 +128,21 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                                             "status": fp.status_code,
                                             "identity_role": identity.role,
                                             "comparison": f"captured/replayed across {identity_a.name} and {identity_b.name}",
+                                            "scope_state": policy.state_for_host(urlsplit(url).hostname or "").value,
                                         },
                                     ))
 
                     if diff.different:
+                        raw_candidates += 1
+                        if not diff.material:
+                            excluded_nonmaterial += 1
+                            continue
                         findings.append(Finding(
                             tool=self.name,
                             family=self.family,
                             rule_id="halo.identity-response-differential",
-                            title="Response differs across identities",
-                            severity="medium",
+                            title="Material response difference across identities",
+                            severity="low",
                             url=url,
                             identity=identity_a.name,
                             compared_identity=identity_b.name,
@@ -127,6 +157,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                                     "body_length": diff.a.body_length,
                                     "content_type": diff.a.content_type,
                                     "json_shape": diff.a.json_shape,
+                                    "semantic_sha256": diff.a.semantic_sha256,
                                 },
                                 "identity_b": {
                                     "name": identity_b.name,
@@ -135,18 +166,31 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                                     "body_length": diff.b.body_length,
                                     "content_type": diff.b.content_type,
                                     "json_shape": diff.b.json_shape,
+                                    "semantic_sha256": diff.b.semantic_sha256,
                                 },
+                                "interpretation": "differential observation; authorization impact requires reproduction evidence",
                             },
                         ))
+
             coverage.tools_executed = 1
             coverage.findings = len(findings)
             coverage.metadata.update({
                 "replayable_requests": len(request_index),
                 "comparisons_completed": comparisons_completed,
                 "request_budget_remaining": remaining,
+                "excluded_nonmaterial_differences": excluded_nonmaterial,
+                "scope_transitions": policy.provenance(),
             })
             ctx["request_budget_remaining"] = remaining
-            finalize_accounting(coverage, ResultAccounting(len(findings), len(findings), 0))
+            finalize_accounting(coverage, ResultAccounting(
+                raw_result_count=raw_candidates,
+                normalized_count=len(findings),
+                excluded_count=excluded_nonmaterial,
+                exclusion_reasons=(
+                    {"volatile-or-nonmaterial-response-difference": excluded_nonmaterial}
+                    if excluded_nonmaterial else {}
+                ),
+            ))
         except TimeoutError as exc:
             coverage.status = FamilyStatus.TIMEOUT
             coverage.reason = str(exc)
