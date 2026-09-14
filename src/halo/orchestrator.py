@@ -65,7 +65,7 @@ async def _run_optional_family(
     if family == "container":
         return await TrivyContainerAdapter().run(target_name, str(gate_value))
     if family == "iac":
-        return await TrivyIaCAdapter().run(target_name, [str(path) for path in gate.value])
+        return await TrivyIaCAdapter().run(target_name, [str(path) for path in gate_value])
     raise ValueError(f"unknown optional family {family!r}")
 
 
