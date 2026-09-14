@@ -46,6 +46,7 @@ class TargetRun:
             "scope_transitions": self.context.get("scope_transitions", []),
             "request_budget_remaining": self.context.get("request_budget_remaining"),
             "technology_profile": self.technology_profile.to_dict() if self.technology_profile else None,
+            "identity_capabilities": self.context.get("identity_capabilities"),
             "publication": self.publication.to_dict() if self.publication else None,
         }
         return sanitize_for_report(payload)
@@ -71,6 +72,25 @@ async def _run_optional_family(
     raise ValueError(f"unknown optional family {family!r}")
 
 
+def _trusted_identity_names(
+    vault: IdentityVault,
+    operational_names: list[str],
+    discovery_coverage: CoverageRecord,
+) -> list[str]:
+    """Use anonymous plus only authenticated identities whose session proof succeeded."""
+    per_identity = discovery_coverage.metadata.get("per_identity") or {}
+    trusted: list[str] = []
+    for name in operational_names:
+        identity = vault.get(name)
+        if identity.role == "anonymous":
+            trusted.append(name)
+            continue
+        metadata = per_identity.get(name) or {}
+        if bool(metadata.get("authentication_verified")):
+            trusted.append(name)
+    return trusted
+
+
 async def run_target(
     target_name: str,
     target: dict[str, Any],
@@ -84,7 +104,16 @@ async def run_target(
     run.context["request_budget_remaining"] = int(target.get("limits", {}).get("request_budget", 250))
     run.technology_profile = resolve_technologies(repo_root, target)
     run.context["technology_profile"] = run.technology_profile.to_dict()
-    identities = [str(name) for name in target.get("identities") or vault.names()]
+
+    resolution = vault.resolve_for_target(target)
+    run.context["identity_capabilities"] = resolution.to_dict()
+    if not resolution.operational:
+        raise RuntimeError(f"target {target_name!r} has no operational identity")
+    if resolution.mode == "required" and resolution.unavailable:
+        raise RuntimeError(
+            f"target {target_name!r} requires every selected identity to be operational: {resolution.unavailable}"
+        )
+    identities = resolution.operational_names
 
     web_applicable, web_reason = family_applicability("browser-discovery", target, run.technology_profile)
     if not web_applicable:
@@ -98,14 +127,26 @@ async def run_target(
         _, discovery_coverage = await BrowserDiscoveryAdapter().run_for_identities(
             target_name, target, vault, identities=identities, context=run.context
         )
+        discovery_coverage.metadata["identity_capabilities"] = resolution.to_dict()
     run.coverage.append(discovery_coverage)
 
+    trusted_identities = _trusted_identity_names(vault, identities, discovery_coverage)
+    run.context["identity_capabilities"]["trusted_for_active_checks"] = trusted_identities
+
     hardening_applicable, hardening_reason = family_applicability("web-hardening", target, run.technology_profile)
-    if hardening_applicable:
+    if hardening_applicable and trusted_identities:
         hardening_findings, hardening_coverage = await WebHardeningAdapter().run_for_identities(
-            target_name, target, vault, identities=identities, context=run.context
+            target_name, target, vault, identities=trusted_identities, context=run.context
         )
         run.findings.extend(hardening_findings)
+    elif hardening_applicable:
+        hardening_coverage = CoverageRecord(
+            target=target_name,
+            family="web-hardening",
+            status=FamilyStatus.SKIPPED,
+            reason="no trusted identity is available for active response checks",
+            tools_expected=1,
+        )
     else:
         hardening_coverage = CoverageRecord(
             target=target_name,
@@ -116,10 +157,20 @@ async def run_target(
     run.coverage.append(hardening_coverage)
 
     if discovery_coverage.status is FamilyStatus.RAN:
-        replay_findings, replay_coverage = await ReplayRuntimeAdapter().run_for_identities(
-            target_name, target, vault, identities=identities, context=run.context
-        )
-        run.findings.extend(replay_findings)
+        if len(trusted_identities) >= 2:
+            replay_findings, replay_coverage = await ReplayRuntimeAdapter().run_for_identities(
+                target_name, target, vault, identities=trusted_identities, context=run.context
+            )
+            run.findings.extend(replay_findings)
+        else:
+            replay_coverage = CoverageRecord(
+                target=target_name,
+                family="runtime-verification",
+                status=FamilyStatus.SKIPPED,
+                reason="runtime differential verification requires at least two trusted identities; public-surface coverage remains valid",
+                tools_expected=1,
+                identities_attempted=trusted_identities,
+            )
         run.coverage.append(replay_coverage)
     else:
         run.coverage.append(CoverageRecord(
@@ -130,6 +181,7 @@ async def run_target(
             tools_expected=1,
         ))
 
+    family_identities = trusted_identities or identities
     for family in OPTIONAL_INPUT_FAMILIES:
         gate = evaluate_family_input(family, target, repo_root)
         if gate.status is FamilyStatus.SKIPPED:
@@ -161,7 +213,7 @@ async def run_target(
             ))
             continue
         findings, coverage = await _run_optional_family(
-            family, target_name, target, vault, identities, run.context, gate.value
+            family, target_name, target, vault, family_identities, run.context, gate.value
         )
         run.findings.extend(findings)
         run.coverage.append(coverage)
