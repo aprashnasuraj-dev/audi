@@ -1,0 +1,45 @@
+rules:
+  - id: minly-client-dom-html-sink
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Candidate DOM HTML injection sink; requires manual source-to-sink validation.
+    pattern-regex: '(innerHTML\s*=|outerHTML\s*=|insertAdjacentHTML\s*\(|document\.write\s*\()'
+    metadata:
+      candidate_only: true
+      manual_validation_required: true
+
+  - id: minly-client-dynamic-code
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Candidate dynamic code execution primitive; requires manual controllability analysis.
+    pattern-regex: '(\beval\s*\(|\bnew\s+Function\s*\()'
+    metadata:
+      candidate_only: true
+      manual_validation_required: true
+
+  - id: minly-client-message-listener
+    languages: [javascript, typescript]
+    severity: INFO
+    message: postMessage receiver observed; manually verify origin validation and sensitive actions.
+    pattern-regex: 'addEventListener\s*\(\s*["'"']message["'"']'
+    metadata:
+      candidate_only: true
+      manual_validation_required: true
+
+  - id: minly-client-authz-keywords
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Client-side authorization/role keyword observed; use only to prioritize manual server-side authorization checks.
+    pattern-regex: '(isAdmin|is_admin|role\s*[:=]|permission|permissions|canAccess|authorize|authorization)'
+    metadata:
+      candidate_only: true
+      manual_validation_required: true
+
+  - id: minly-client-sensitive-route-keywords
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Security-relevant business route keyword observed; prioritize normal-UI mapping and own-account authorization checks.
+    pattern-regex: '(/admin|/account|/profile|/creator|/booking|/order|/payment|/wallet|/message|/upload|/media)'
+    metadata:
+      candidate_only: true
+      manual_validation_required: true
