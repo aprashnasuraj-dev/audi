@@ -4,6 +4,11 @@ targets:
     url: http://127.0.0.1:8765/
     allow_hosts:
       - 127.0.0.1
+    authenticated_flow_hosts:
+      - localhost
+    deny_hosts:
+      - blocked.invalid
+      - "*.blocked.invalid"
     identities:
       - anonymous
       - mock-user
@@ -17,25 +22,40 @@ targets:
     minimum_coverage_ratio: 1.0
     limits:
       max_pages: 10
-      request_budget: 100
+      request_budget: 120
       timeout_seconds: 5
+      max_requests_per_second: 20
+      max_retry_after_seconds: 5
+      stop_on_429: true
     browser:
       settle_ms: 250
+      allow_third_party_resources: false
     openapi: null
     graphql_schema: null
     container_image: null
     iac_globs:
       - infra/**/*.tf
 
-  # Authorized program seed targets. Keep allow_hosts exact: wildcard families are
-  # explicitly out of scope. Authenticated subdomain flows require a separate,
-  # navigation-derived scope mechanism before they may be followed automatically.
+  # Authorized program seed targets. Exact hosts are permanent seeds. A sibling
+  # subdomain is never statically allowed: it can become FLOW_ALLOWED only after
+  # a verified authenticated top-level navigation from an already-authorized page.
   - name: web-app
     url: https://app.web.com/
+    live_target: true
+    scope_snapshot: "2026-09-14"
+    scope_max_age_days: 60
     allow_hosts:
       - app.web.com
+    authenticated_flow_suffixes:
+      - web.com
+    deny_hosts:
+      - register.com
+      - "*.register.com"
+      - app.gator.com
     identities:
       - anonymous
+      - web-user
+    require_authenticated_identity: true
     technologies:
       - web
     required_families:
@@ -43,14 +63,17 @@ targets:
       - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_snapshot: "2026-09-14"
-    scope_note: "Exact app.web.com seed is in scope; arbitrary *.web.com enumeration is out of scope. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    scope_note: "Exact app.web.com is a seed. Arbitrary *.web.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
     limits:
-      max_pages: 25
-      request_budget: 250
+      max_pages: 35
+      request_budget: 350
       timeout_seconds: 10
+      max_requests_per_second: 2
+      max_retry_after_seconds: 30
+      stop_on_429: true
     browser:
-      settle_ms: 750
+      settle_ms: 900
+      allow_third_party_resources: true
     openapi: null
     graphql_schema: null
     container_image: null
@@ -59,10 +82,21 @@ targets:
 
   - name: networksolutions
     url: https://www.networksolutions.com/
+    live_target: true
+    scope_snapshot: "2026-09-14"
+    scope_max_age_days: 60
     allow_hosts:
       - www.networksolutions.com
+    authenticated_flow_suffixes:
+      - networksolutions.com
+    deny_hosts:
+      - register.com
+      - "*.register.com"
+      - app.gator.com
     identities:
       - anonymous
+      - networksolutions-user
+    require_authenticated_identity: true
     technologies:
       - web
     required_families:
@@ -70,14 +104,17 @@ targets:
       - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_snapshot: "2026-09-14"
-    scope_note: "Exact www.networksolutions.com seed is in scope; arbitrary *.networksolutions.com enumeration is out of scope. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    scope_note: "Exact www.networksolutions.com is a seed. Arbitrary *.networksolutions.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
     limits:
-      max_pages: 25
-      request_budget: 250
+      max_pages: 35
+      request_budget: 350
       timeout_seconds: 10
+      max_requests_per_second: 2
+      max_retry_after_seconds: 30
+      stop_on_429: true
     browser:
-      settle_ms: 750
+      settle_ms: 900
+      allow_third_party_resources: true
     openapi: null
     graphql_schema: null
     container_image: null
@@ -86,10 +123,21 @@ targets:
 
   - name: bluehost
     url: https://www.bluehost.com/
+    live_target: true
+    scope_snapshot: "2026-09-14"
+    scope_max_age_days: 60
     allow_hosts:
       - www.bluehost.com
+    authenticated_flow_suffixes:
+      - bluehost.com
+    deny_hosts:
+      - register.com
+      - "*.register.com"
+      - app.gator.com
     identities:
       - anonymous
+      - bluehost-user
+    require_authenticated_identity: true
     technologies:
       - web
     required_families:
@@ -97,14 +145,17 @@ targets:
       - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_snapshot: "2026-09-14"
-    scope_note: "Exact www.bluehost.com seed is in scope; arbitrary *.bluehost.com enumeration is out of scope. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    scope_note: "Exact www.bluehost.com is a seed. Arbitrary *.bluehost.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
     limits:
-      max_pages: 25
-      request_budget: 250
+      max_pages: 35
+      request_budget: 350
       timeout_seconds: 10
+      max_requests_per_second: 2
+      max_retry_after_seconds: 30
+      stop_on_429: true
     browser:
-      settle_ms: 750
+      settle_ms: 900
+      allow_third_party_resources: true
     openapi: null
     graphql_schema: null
     container_image: null
@@ -113,10 +164,21 @@ targets:
 
   - name: hostgator
     url: https://www.hostgator.com/
+    live_target: true
+    scope_snapshot: "2026-09-14"
+    scope_max_age_days: 60
     allow_hosts:
       - www.hostgator.com
+    authenticated_flow_suffixes:
+      - hostgator.com
+    deny_hosts:
+      - app.gator.com
+      - register.com
+      - "*.register.com"
     identities:
       - anonymous
+      - hostgator-user
+    require_authenticated_identity: true
     technologies:
       - web
     required_families:
@@ -124,14 +186,17 @@ targets:
       - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_snapshot: "2026-09-14"
-    scope_note: "Exact www.hostgator.com seed is in scope; arbitrary *.hostgator.com enumeration is out of scope. app.gator.com and arbitrary *.hostgator.com are not statically authorized. Authenticated subdomain flows may be followed only when navigation provenance is captured by a future scope-transition gate."
+    scope_note: "Exact www.hostgator.com is a seed. app.gator.com remains denied. Arbitrary *.hostgator.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
     limits:
-      max_pages: 25
-      request_budget: 250
+      max_pages: 35
+      request_budget: 350
       timeout_seconds: 10
+      max_requests_per_second: 2
+      max_retry_after_seconds: 30
+      stop_on_429: true
     browser:
-      settle_ms: 750
+      settle_ms: 900
+      allow_third_party_resources: true
     openapi: null
     graphql_schema: null
     container_image: null
