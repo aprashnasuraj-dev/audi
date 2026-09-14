@@ -69,6 +69,7 @@ jobs:
               'CURRENT_SERVICE_SURFACE.md',
               'STATE_MACHINE_MATRIX.md',
               'LATENT_RISK_REGISTER_TEMPLATE.md',
+              'HIGH_IMPACT_RESEARCH_QUEUE.md',
           ]
           missing = [name for name in required if not (root / name).is_file()]
           if missing:
@@ -128,7 +129,12 @@ jobs:
           assert modes['public_surface']['mutate_state'] is False
           assert modes['two_account_differential']['object_enumeration'] is False
 
-          print('Minly VDP blueprint: scope/guardrail/adaptive-policy validation PASS')
+          queue = (root / 'HIGH_IMPACT_RESEARCH_QUEUE.md').read_text(encoding='utf-8')
+          assert 'None of these entries is a vulnerability claim' in queue
+          assert queue.count('| 1 |') >= 1
+          assert 'Severity discipline' in queue
+
+          print('Minly VDP blueprint: scope/guardrail/adaptive-policy/high-impact-queue validation PASS')
           PY
 
       - name: Run adaptive policy gate
