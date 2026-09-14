@@ -1,0 +1,154 @@
+name: Minly Final Heavy Audit Readiness
+
+on:
+  push:
+    branches:
+      - 'feat/minly-*'
+      - 'program/minly-*'
+      - main
+    paths:
+      - 'programs/minly-vdp/**'
+      - '.github/workflows/minly-vdp-final-heavy-audit.yml'
+      - '.github/workflows/minly-final-heavy-readiness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Zero-traffic final runner validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install readiness parser
+        run: python -m pip install 'PyYAML==6.0.3'
+      - name: Compile final runner family
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            programs/minly-vdp/final_audit_runner.py \
+            programs/minly-vdp/final_report_maker.py \
+            programs/minly-vdp/mobile_static_audit.py \
+            programs/minly-vdp/minly_passive_map.py
+      - name: Validate exact target scope and final workflow guardrails
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json, yaml
+          root=Path('programs/minly-vdp')
+          scope=yaml.safe_load((root/'scope.yml').read_text())
+          assert scope['in_scope']['website'][0]['url'] == 'https://minly.com/'
+          assert scope['in_scope']['website'][0]['exact_hosts'] == ['minly.com']
+          assert scope['in_scope']['android'][0]['package'] == 'com.minly.users'
+          assert scope['in_scope']['ios'][0]['app_store_id'] == '1528802350'
+          assert scope['account_policy']['own_accounts_only'] is True
+          assert scope['account_policy']['access_other_user_data'] == 'forbidden'
+          target=yaml.safe_load((root/'halo-targets.yml').read_text())['targets'][0]
+          assert target['name'] == 'minly-web'
+          assert target['url'] == 'https://minly.com/'
+          assert target['allow_hosts'] == ['minly.com']
+          assert target['limits']['max_pages'] <= 20
+          assert target['limits']['request_budget'] <= 120
+          assert target['limits']['max_requests_per_second'] <= 1
+          schema=json.loads((root/'manual-findings.schema.json').read_text())
+          assert schema['properties']['findings']['type'] == 'array'
+
+          wf_path=Path('.github/workflows/minly-vdp-final-heavy-audit.yml')
+          wf=yaml.safe_load(wf_path.read_text())
+          triggers=wf.get(True) or wf.get('on') or {}
+          assert 'workflow_dispatch' in triggers
+          assert 'push' not in triggers and 'schedule' not in triggers
+          text=wf_path.read_text()
+          for phrase in [
+              'confirm_current_scope', 'MINLY_USER_STORAGE_STATE_B64',
+              'MINLY_ANDROID_APK_URL', 'MINLY_ANDROID_APK_SHA256',
+              'MINLY_IOS_IPA_URL', 'MINLY_IOS_IPA_SHA256',
+              'MINLY_MANUAL_FINDINGS_B64', 'final_audit_runner.py',
+              'compiled-final-report.pdf', 'com.minly.users', '1528802350',
+          ]:
+              assert phrase in text, phrase
+          print('scope + manual-only workflow validation: PASS')
+          PY
+      - name: Smoke-test report maker without findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/minly-empty /tmp/minly-report
+          mkdir -p /tmp/minly-empty
+          python programs/minly-vdp/final_report_maker.py --root /tmp/minly-empty --output /tmp/minly-report
+          test -s /tmp/minly-report/compiled-final-report.json
+          test -s /tmp/minly-report/compiled-final-report.md
+          test -s /tmp/minly-report/compiled-final-report.html
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('/tmp/minly-report/compiled-final-report.json').read_text())
+          assert data['verified_submission_count'] == 0
+          assert data['policy']['do_not_invent_findings'] is True
+          assert data['policy']['automated_candidates_are_unverified'] is True
+          print('empty report smoke test: PASS')
+          PY
+      - name: Verify evidence gate and out-of-scope suppression
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/manual-findings.json <<'JSON'
+          {
+            "findings": [
+              {
+                "title": "Authorization bypass in test component allows cross-account object read",
+                "target": "Minly Website",
+                "technical_severity": "High",
+                "vrt_category": "Broken Access Control > Insecure Direct Object Reference (IDOR)",
+                "location": "https://minly.com/example",
+                "status": "Verified",
+                "summary": "A human-reviewed test fixture demonstrates an authorization boundary failure.",
+                "vulnerability_details": "This readiness fixture contains no live Minly data and exists only to validate report compilation.",
+                "steps_to_reproduce": ["Use Account A fixture.", "Use Account B fixture.", "Observe deterministic fixture result."],
+                "proof_of_concept": "Synthetic readiness evidence proving the report-maker verification path only.",
+                "impact_attacker": "As an attacker, I could access an object outside my fixture account boundary in this synthetic compiler test.",
+                "suggested_remediation": "Enforce object ownership server-side.",
+                "evidence_refs": ["synthetic-readiness-fixture"]
+              },
+              {
+                "title": "Missing HSTS header",
+                "target": "Minly Website",
+                "technical_severity": "Low",
+                "vrt_category": "Server Security Misconfiguration > Missing Security Header",
+                "location": "https://minly.com/",
+                "status": "Verified",
+                "summary": "Missing security header only.",
+                "vulnerability_details": "No exploit is demonstrated.",
+                "steps_to_reproduce": ["Observe header."],
+                "proof_of_concept": "Synthetic best-practice-only readiness fixture.",
+                "impact_attacker": "As an attacker, I could not demonstrate an exploit from this fixture.",
+                "suggested_remediation": "Set HSTS.",
+                "evidence_refs": ["synthetic-oos-fixture"]
+              }
+            ]
+          }
+          JSON
+          rm -rf /tmp/minly-report-2
+          python programs/minly-vdp/final_report_maker.py --root /tmp/minly-empty --manual-findings /tmp/manual-findings.json --output /tmp/minly-report-2
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('/tmp/minly-report-2/compiled-final-report.json').read_text())
+          assert data['verified_submission_count'] == 1
+          assert len(data['rejected_manual_findings']) == 1
+          assert data['submission_files'] == ['submission-01.md']
+          report=Path('/tmp/minly-report-2/submissions/submission-01.md').read_text()
+          assert '# VRT Category' in report
+          assert 'As an attacker, I could' in report
+          print('human evidence gate + OOS suppression: PASS')
+          PY

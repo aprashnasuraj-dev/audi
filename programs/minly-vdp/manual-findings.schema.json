@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Minly human-reviewed findings",
+  "type": "object",
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "title", "target", "technical_severity", "vrt_category", "location", "status",
+          "summary", "vulnerability_details", "steps_to_reproduce", "proof_of_concept",
+          "impact_attacker", "suggested_remediation", "evidence_refs"
+        ],
+        "properties": {
+          "title": {"type": "string"},
+          "target": {"enum": ["Minly Website", "iOS App", "Android App", "Minly iOS App", "Minly Android App"]},
+          "technical_severity": {"enum": ["Critical", "High", "Medium", "Low", "Informational"]},
+          "vrt_category": {"type": "string"},
+          "location": {"type": "string"},
+          "status": {"enum": ["Verified", "Partially verified", "Unverified"]},
+          "summary": {"type": "string"},
+          "vulnerability_details": {"type": "string"},
+          "steps_to_reproduce": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "proof_of_concept": {"type": "string"},
+          "raw_request": {"type": "string"},
+          "raw_response": {"type": "string"},
+          "visual_evidence": {"type": "string"},
+          "impact_attacker": {"type": "string", "pattern": "^As an attacker, I could"},
+          "impact_details": {"type": "string"},
+          "who_affected": {"type": "string"},
+          "data_systems_affected": {"type": "string"},
+          "worst_case": {"type": "string"},
+          "authentication_required": {"type": "string"},
+          "user_interaction_required": {"type": "string"},
+          "scope_of_impact": {"type": "string"},
+          "limitations": {"type": "string"},
+          "suggested_remediation": {"type": "string"},
+          "demonstrated_exploit": {"type": "boolean", "default": false},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}},
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["filename", "description"],
+              "properties": {
+                "filename": {"type": "string"},
+                "description": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

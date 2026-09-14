@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Low-impact, exact-host Minly public-surface mapper.
+"""Low-impact, exact-host Minly public/authenticated-surface mapper.
 
 This script is intentionally conservative for the Minly VDP:
 - exact host only (minly.com)
@@ -10,6 +10,7 @@ This script is intentionally conservative for the Minly VDP:
 - no active probing of observed API candidates
 - third-party requests are blocked
 - query values are redacted from output
+- optional Playwright storage-state is read only from an ephemeral runner path
 
 It is a candidate-discovery tool, not a vulnerability scanner.
 """
@@ -20,11 +21,10 @@ import asyncio
 import hashlib
 import json
 import re
-import time
 from collections import deque
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from playwright.async_api import async_playwright
 
@@ -78,10 +78,14 @@ async def main() -> int:
     ap.add_argument("--request-budget", type=int, default=80)
     ap.add_argument("--delay-ms", type=int, default=1200)
     ap.add_argument("--settle-ms", type=int, default=900)
+    ap.add_argument("--storage-state", default="", help="ephemeral Playwright storage-state path for researcher-controlled Minly account")
     args = ap.parse_args()
 
     if args.max_pages > 20 or args.request_budget > 120 or args.delay_ms < 750:
         raise SystemExit("refusing unsafe limits: max_pages<=20, request_budget<=120, delay_ms>=750")
+    storage_state = Path(args.storage_state) if args.storage_state else None
+    if storage_state and not storage_state.is_file():
+        raise SystemExit("storage-state path does not exist")
 
     out = Path(args.output)
     js_dir = out / "_temp_js"
@@ -100,7 +104,10 @@ async def main() -> int:
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context(ignore_https_errors=False)
+        context_kwargs = {"ignore_https_errors": False}
+        if storage_state:
+            context_kwargs["storage_state"] = str(storage_state)
+        context = await browser.new_context(**context_kwargs)
 
         async def route_handler(route):
             nonlocal request_count, blocked_count
@@ -193,13 +200,13 @@ async def main() -> int:
             finally:
                 await page.close()
 
-        # Reuse the already-authorized exact-host context to fetch only JS URLs that
-        # were naturally observed. No guessed endpoints are requested.
+        # Fetch only same-origin JS URLs naturally observed during allowed navigation.
         js_findings = []
         for idx, js_url in enumerate(sorted(js_urls)):
             if request_count >= args.request_budget or not exact_scope(js_url):
                 break
             try:
+                await asyncio.sleep(args.delay_ms / 1000)
                 resp = await context.request.get(js_url, timeout=15000)
                 request_count += 1
                 if not resp.ok:
@@ -238,6 +245,7 @@ async def main() -> int:
 
     summary = {
         "scope": {"seed": SEED, "exact_host": ALLOWED_HOST, "third_party_requests": "blocked"},
+        "identity_mode": "researcher-storage-state" if storage_state else "anonymous",
         "limits": {"max_pages": args.max_pages, "request_budget": args.request_budget, "delay_ms": args.delay_ms},
         "counts": {
             "requests_allowed": request_count,
@@ -257,11 +265,12 @@ async def main() -> int:
     (out / "surface-map.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     md = [
-        "# Minly public-surface research map",
+        "# Minly research-surface map",
         "",
         "> Candidate-discovery output only. Nothing in this file is a confirmed vulnerability.",
         "",
         f"- Exact host tested: `{ALLOWED_HOST}`",
+        f"- Identity mode: **{summary['identity_mode']}**",
         f"- Pages mapped: **{len(pages)}**",
         f"- Requests allowed: **{request_count}** / {args.request_budget}",
         f"- Third-party/out-of-scope requests blocked: **{blocked_count}**",
@@ -278,7 +287,6 @@ async def main() -> int:
         md.append(f"- `{host}`")
     (out / "surface-map.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
-    # Raw JS is temporary and must never be uploaded as an artifact by default.
     print(json.dumps(summary["counts"], indent=2))
     return 0
 
