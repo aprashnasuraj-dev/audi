@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - uses: actions/setup-java@7a445ee88d4e23b52c33a2039a230077c4367a0b
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
         with:
           distribution: temurin
           java-version: '17'
