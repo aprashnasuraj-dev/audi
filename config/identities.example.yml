@@ -1,0 +1,7 @@
+schema_version: 1
+identities:
+  anonymous: {}
+  user:
+    bearer_token: ${HALO_USER_TOKEN}
+  admin:
+    bearer_token: ${HALO_ADMIN_TOKEN}
