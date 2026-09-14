@@ -1,0 +1,16 @@
+schema_version: 1
+identities:
+  anonymous:
+    role: anonymous
+
+  minly-user-a:
+    role: user
+    storage_state_path: ${MINLY_USER_A_STORAGE_STATE}
+    auth_check_url: ${MINLY_USER_A_AUTH_CHECK_URL}
+    auth_check_contains: ${MINLY_USER_A_AUTH_CHECK_CONTAINS}
+
+  minly-user-b:
+    role: user
+    storage_state_path: ${MINLY_USER_B_STORAGE_STATE}
+    auth_check_url: ${MINLY_USER_B_AUTH_CHECK_URL}
+    auth_check_contains: ${MINLY_USER_B_AUTH_CHECK_CONTAINS}
