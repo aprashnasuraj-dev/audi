@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
+from ..live_safety import LiveSafetyController, LiveSafetyStop
 from ..models import Identity
-from ..scope import ScopeGuard
+from ..scope import ScopePolicy, ScopeState
 
 
 @dataclass
@@ -13,8 +15,14 @@ class DiscoveryResult:
     pages: list[str] = field(default_factory=list)
     network_urls: list[str] = field(default_factory=list)
     requests: list[dict[str, str]] = field(default_factory=list)
+    responses: list[dict[str, object]] = field(default_factory=list)
+    blocked_requests: list[dict[str, str]] = field(default_factory=list)
+    passive_third_party_requests: list[dict[str, str]] = field(default_factory=list)
     total_requests: int = 0
     budget_exhausted: bool = False
+    authentication_verified: bool = False
+    authentication_reason: str = ""
+    rate_limit_stop: str | None = None
 
     @property
     def urls(self) -> list[str]:
@@ -22,27 +30,33 @@ class DiscoveryResult:
 
 
 class BrowserCrawler:
-    """JavaScript-aware crawler that records XHR/fetch traffic under one identity.
+    """JavaScript-aware, scope-provenance-aware browser crawler.
 
-    Every HTTP(S) browser request is intercepted before transmission. Requests
-    outside ScopeGuard are aborted; in-scope requests consume the bounded budget.
-    Non-network schemes such as data:/blob: may continue without consuming it.
+    Only seed or navigation-derived FLOW_ALLOWED hosts are audited. Third-party
+    static resources may optionally load so SPAs remain functional, but they are
+    never added to audit inventory and authentication headers are stripped.
     """
+
+    PASSIVE_RESOURCE_TYPES = frozenset({"stylesheet", "script", "image", "font", "media"})
 
     def __init__(
         self,
-        scope: ScopeGuard,
+        scope: ScopePolicy,
+        safety: LiveSafetyController,
         *,
         max_pages: int = 25,
         settle_ms: int = 750,
         request_budget: int = 250,
+        allow_third_party_resources: bool = False,
     ):
         if request_budget < 1:
             raise ValueError("request_budget must be at least 1")
         self.scope = scope
+        self.safety = safety
         self.max_pages = max_pages
         self.settle_ms = settle_ms
         self.request_budget = request_budget
+        self.allow_third_party_resources = allow_third_party_resources
 
     async def crawl(self, seed_url: str, identity: Identity) -> DiscoveryResult:
         seed = self.scope.assert_url(seed_url)
@@ -57,7 +71,10 @@ class BrowserCrawler:
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
-            context = await browser.new_context(extra_http_headers=identity.headers)
+            context_kwargs = {}
+            if identity.storage_state_path:
+                context_kwargs["storage_state"] = identity.storage_state_path
+            context = await browser.new_context(**context_kwargs)
             if identity.cookies:
                 host = urlsplit(seed).hostname or ""
                 await context.add_cookies([
@@ -65,35 +82,139 @@ class BrowserCrawler:
                     for k, v in identity.cookies.items()
                 ])
 
+            auth_verified = identity.role == "anonymous"
+            result.authentication_verified = auth_verified
+            result.authentication_reason = "anonymous identity" if auth_verified else "authentication not yet verified"
+
             async def route_request(route, request) -> None:
+                nonlocal auth_verified
                 scheme = (urlsplit(request.url).scheme or "").lower()
                 if scheme not in {"http", "https"}:
                     await route.continue_()
                     return
-                try:
-                    url = self.scope.assert_url(request.url)
-                except Exception:
+
+                resource_type = str(request.resource_type)
+                host = urlsplit(request.url).hostname or ""
+                state = self.scope.state_for_host(host)
+                top_level = bool(request.is_navigation_request() and request.frame.parent_frame is None)
+                allowed_url: str | None = None
+
+                if state in {ScopeState.SEED_ALLOWED, ScopeState.FLOW_ALLOWED}:
+                    allowed_url = self.scope.assert_url(request.url)
+                elif top_level:
+                    redirected = request.redirected_from
+                    source_url = redirected.url if redirected is not None else request.frame.url
+                    try:
+                        allowed_url, _ = self.scope.try_navigation_transition(
+                            request.url,
+                            source_url=source_url,
+                            identity=identity,
+                            top_level_navigation=True,
+                            authentication_verified=auth_verified,
+                            event="redirect" if redirected is not None else "top-level-navigation",
+                        )
+                    except Exception as exc:
+                        result.blocked_requests.append({
+                            "method": str(request.method).upper(),
+                            "url": request.url,
+                            "resource_type": resource_type,
+                            "reason": str(exc),
+                        })
+                        await route.abort("blockedbyclient")
+                        return
+                elif (
+                    self.allow_third_party_resources
+                    and state is ScopeState.THIRD_PARTY
+                    and resource_type in self.PASSIVE_RESOURCE_TYPES
+                ):
+                    headers = {
+                        key: value for key, value in request.headers.items()
+                        if key.lower() not in {"authorization", "cookie", "proxy-authorization"}
+                    }
+                    result.passive_third_party_requests.append({
+                        "method": str(request.method).upper(),
+                        "url": request.url,
+                        "resource_type": resource_type,
+                    })
+                    await route.continue_(headers=headers)
+                    return
+                else:
+                    result.blocked_requests.append({
+                        "method": str(request.method).upper(),
+                        "url": request.url,
+                        "resource_type": resource_type,
+                        "reason": f"scope state {state.value}",
+                    })
                     await route.abort("blockedbyclient")
                     return
+
                 if result.total_requests >= self.request_budget:
                     result.budget_exhausted = True
                     await route.abort("blockedbyclient")
                     return
+                await self.safety.before_request(allowed_url)
                 result.total_requests += 1
-                resource_type = str(request.resource_type)
+                headers = dict(request.headers)
+                headers.update(identity.headers)
                 result.requests.append({
                     "method": str(request.method).upper(),
-                    "url": url,
+                    "url": allowed_url,
                     "resource_type": resource_type,
                 })
                 if resource_type in {"xhr", "fetch"}:
-                    result.network_urls.append(url)
-                await route.continue_()
+                    result.network_urls.append(allowed_url)
+                await route.continue_(headers=headers)
 
             await context.route("**/*", route_request)
             page = await context.new_page()
 
+            async def observe_response(response) -> None:
+                url = str(response.url)
+                host = urlsplit(url).hostname or ""
+                if not self.scope.allows_host(host):
+                    return
+                result.responses.append({
+                    "url": url,
+                    "status": int(response.status),
+                    "content_type": str((await response.all_headers()).get("content-type", "")),
+                })
+                try:
+                    self.safety.observe_response(url, int(response.status), await response.all_headers())
+                except LiveSafetyStop as exc:
+                    result.rate_limit_stop = str(exc)
+
+            page.on("response", lambda response: asyncio.create_task(observe_response(response)))
+
+            if identity.role != "anonymous":
+                if not identity.auth_check_url:
+                    result.authentication_reason = "authenticated identity has no auth_check_url"
+                else:
+                    check_url = self.scope.assert_url(identity.auth_check_url)
+                    response = await page.goto(check_url, wait_until="domcontentloaded", timeout=20_000)
+                    await page.wait_for_timeout(min(self.settle_ms, 500))
+                    ok = response is not None and 200 <= int(response.status) < 400
+                    reasons: list[str] = []
+                    if identity.auth_check_selector:
+                        selector_ok = await page.locator(identity.auth_check_selector).count() > 0
+                        ok = ok and selector_ok
+                        if not selector_ok:
+                            reasons.append("auth selector not found")
+                    if identity.auth_check_contains:
+                        body_text = await page.locator("body").inner_text()
+                        contains_ok = identity.auth_check_contains in body_text
+                        ok = ok and contains_ok
+                        if not contains_ok:
+                            reasons.append("auth marker text not found")
+                    if not identity.auth_check_selector and not identity.auth_check_contains:
+                        ok = False
+                        reasons.append("auth check requires selector or text marker")
+                    auth_verified = ok
+                    result.authentication_verified = ok
+                    result.authentication_reason = "verified" if ok else "; ".join(reasons) or "auth check failed"
+
             while queue and len(seen) < self.max_pages and not result.budget_exhausted:
+                if result.rate_limit_stop:
+                    raise LiveSafetyStop(result.rate_limit_stop)
                 current = queue.pop(0)
                 if current in seen:
                     continue
@@ -105,12 +226,17 @@ class BrowserCrawler:
                     if result.budget_exhausted:
                         break
                     continue
-                result.pages.append(current)
+                final_url = str(page.url)
+                try:
+                    final_url = self.scope.assert_url(final_url)
+                except Exception:
+                    continue
+                result.pages.append(final_url)
                 hrefs = await page.locator("a[href]").evaluate_all(
                     "els => els.map(e => e.getAttribute('href')).filter(Boolean)"
                 )
                 for href in hrefs:
-                    candidate = urljoin(current, str(href))
+                    candidate = urljoin(final_url, str(href))
                     try:
                         candidate = self.scope.assert_url(candidate)
                     except Exception:
