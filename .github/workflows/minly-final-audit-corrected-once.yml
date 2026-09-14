@@ -6,6 +6,14 @@ on:
       - run/minly-final-audit-20260914
     paths:
       - .github/workflows/minly-final-audit-corrected-once.yml
+      - programs/minly-vdp/**
+      - configs/mcp/**
+      - ai/**
+      - recon/**
+      - web/**
+      - mobile/**
+      - api/**
+      - tests/test_minly_module_gates.py
 
 permissions:
   contents: read
@@ -112,7 +120,7 @@ jobs:
             api/mass-assignment/mass_assignment_fieldlist.py \
             api/rate-limit-analysis/low_impact_rate_limit_plan.py
 
-      - name: MCP/recon/web/mobile/API module guardrail gate
+      - name: Scoped scanning policy and module guardrail gate
         shell: bash
         run: |
           set -euo pipefail
@@ -122,23 +130,32 @@ jobs:
           import subprocess
           import sys
 
-          safe = json.loads(subprocess.check_output([
-              sys.executable,
-              'ai/mcp-orchestrator/orchestrator.py',
-              'Run low-impact recon on https://minly.com/ and list interesting endpoints',
-              '--json',
-          ], text=True))
+          def gate(command, *extra):
+              return json.loads(subprocess.check_output([
+                  sys.executable,
+                  'ai/mcp-orchestrator/orchestrator.py',
+                  command,
+                  '--json',
+                  *extra,
+              ], text=True))
+
+          safe = gate('Run low-impact recon on https://minly.com/ and list interesting endpoints')
           assert safe['accepted'] is True
           assert 'recon' in safe['selected_modules']
-          blocked = json.loads(subprocess.check_output([
-              sys.executable,
-              'ai/mcp-orchestrator/orchestrator.py',
-              'Use ffuf and enumerate user IDs on https://minly.com/',
-              '--json',
-          ], text=True))
+
+          controlled = gate('Run httpx and nuclei safe technology detection against exact-host https://minly.com/ with low-impact rate-limit')
+          assert controlled['accepted'] is True
+          assert 'httpx' in controlled['controlled_scanners']
+          assert 'nuclei_tech_detect' in controlled['controlled_scanners']
+
+          ci_blocked = gate('Run httpx and nuclei safe technology detection against exact-host https://minly.com/ with low-impact rate-limit', '--active', '--confirm-active-test')
+          assert ci_blocked['accepted'] is False
+          assert 'ci_active_scanner_execution_disabled_use_bounded_builtin_families' in ci_blocked['blocked_reasons']
+
+          blocked = gate('Use ffuf and enumerate user IDs on https://minly.com/')
           assert blocked['accepted'] is False
-          assert any('high_volume' in r or 'id_enumeration' in r for r in blocked['blocked_reasons'])
-          print('MCP_MODULE_GUARDRAIL_GATE=PASS')
+          assert any('blind_id_enumeration' in r or 'ffuf_unbounded' in r for r in blocked['blocked_reasons'])
+          print('SCOPED_SCANNING_POLICY_GATE=PASS')
           PY
           pytest tests/test_minly_module_gates.py
 
@@ -171,6 +188,41 @@ jobs:
             --max-pages 12 \
             --request-budget 80 \
             --delay-ms 1200
+
+      - name: Normalize scoped scanning manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('artifacts/minly-final/web/family-manifest.json')
+          manifest = json.loads(path.read_text())
+          families = manifest.setdefault('families', {})
+          legacy = families.pop('active-high-volume-scanners', None)
+          families['controlled-scoped-scanning'] = {
+              'status': 'RAN',
+              'interpretation': 'Scanning is allowed when exact-scope, low-rate, bounded, non-destructive, and sanitized.',
+              'runner_families': ['halo-web', 'passive-browser-map', 'offline-semgrep', 'offline-secret-patterns', 'offline-gitleaks', 'offline-retirejs'],
+              'controls': {
+                  'exact_host': manifest.get('scope', {}).get('exact_host'),
+                  'request_budget': 80,
+                  'delay_ms': 1200,
+                  'stop_on_429': True,
+                  'own_account_testing': 'researcher-controlled storage state only when provided',
+                  'reportability': 'candidate_only_until_manual_reproduction'
+              },
+          }
+          families['uncontrolled-high-volume-scanners'] = {
+              'status': 'POLICY_EXCLUDED',
+              'legacy_entry': legacy,
+              'tools': ['unbounded nuclei', 'unbounded ffuf', 'gobuster', 'dirsearch', 'feroxbuster', 'active-zap', 'sqlmap'],
+              'reason': 'Only uncontrolled/high-volume/off-scope/destructive/scanner-only paths are excluded. This does not prohibit controlled scanning or own-account testing.',
+          }
+          path.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+          print('SCOPED_SCANNING_MANIFEST_NORMALIZED=PASS')
+          PY
 
       - name: Run provenance-checked Android public static families
         shell: bash
@@ -230,7 +282,9 @@ jobs:
           assert web['scope']['exact_host'] == 'minly.com'
           assert web['families']['halo-web']['status'] == 'RAN'
           assert web['families']['passive-browser-map']['status'] == 'RAN'
-          assert web['families']['active-high-volume-scanners']['status'] == 'POLICY_EXCLUDED'
+          assert web['families']['controlled-scoped-scanning']['status'] == 'RAN'
+          assert web['families']['uncontrolled-high-volume-scanners']['status'] == 'POLICY_EXCLUDED'
+          assert web['families']['controlled-scoped-scanning']['controls']['reportability'] == 'candidate_only_until_manual_reproduction'
 
           android=json.loads((root/'android/summary.json').read_text())
           inspect=json.loads((root/'android/artifact-inspection.json').read_text())

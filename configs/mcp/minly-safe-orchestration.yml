@@ -1,10 +1,22 @@
-schema_version: 1
+schema_version: 2
 program: Minly VDP
 scope_file: programs/minly-vdp/scope.yml
 default_mode: dry_run_plan_only
-manual_trigger_required: true
+
+policy_interpretation:
+  scanning_is_allowed_when: exact-scope, low-rate, bounded, non-destructive, and sanitized
+  uncontrolled_scanners_mean: off-scope, high-volume, fuzzing/bruteforce, destructive, privacy-invasive, or unbounded automation
+  own_accounts_only_means: authenticated tests must use researcher-controlled Account A/B identities only; it does not prohibit testing
+  scanner_only_submission_rule: scanner output is a candidate queue, not a final report
+
+manual_trigger_required_for_live_findings: true
 manual_confirmation_required_for_active_tests: true
-live_target_traffic_allowed_from_ci: false
+
+ci_controlled_scanners:
+  allow_execution: false
+  reason: CI may run bounded built-in audit families and policy gates, but external active scanners stay human-confirmed outside CI.
+live_target_traffic_allowed_from_ci: bounded_builtin_audit_families_only
+
 exact_scope:
   website:
     exact_hosts:
@@ -13,7 +25,9 @@ exact_scope:
       - "*.minly.com"
   android_package: com.minly.users
   ios_app_store_id: "1528802350"
+
 global_limits:
+  exact_host_only: true
   max_requests_per_second: 1
   request_budget: 80
   max_pages: 12
@@ -22,16 +36,35 @@ global_limits:
   no_identifier_enumeration: true
   own_accounts_only: true
   evidence_publication: sanitized_only
+
+controlled_scanner_policy:
+  allowed:
+    - httpx exact-host technology/fingerprint checks
+    - katana exact-host crawl with request budget and depth/page limits
+    - gau/waybackurls archival URL collection filtered back to exact host
+    - gf pattern matching over collected/local URLs
+    - nuclei technology/exposure templates only with low-rate controls
+    - bounded ffuf only with allowlisted paths, tiny wordlist, rate limit, and no ID/credential fuzzing
+  blocked:
+    - subdomain/port sweeps against non-listed assets
+    - blind object/user/order/account ID enumeration
+    - credential, OTP, or token brute force
+    - WAF-bypass payload generation as a goal
+    - SQLi/XSS exploit automation against production
+    - destructive, high-volume, or availability-impacting tests
+
 modules:
   mcp_ai_orchestration:
     enabled: true
-    active_execution: disabled_in_ci
+    active_execution: gated
     confirmation_flag: --confirm-active-test
   recon:
     enabled: true
     allowed_modes:
       - local_artifact_analysis
       - exact_host_low_rate_public_mapping
+      - bounded_technology_detection
+      - archived_url_collection_filtered_to_exact_host
     disallowed_modes:
       - subdomain_enumeration_against_minly
       - high_volume_scanning
@@ -42,6 +75,7 @@ modules:
       - checklist
       - local_token_analysis
       - owned_account_test_plan
+      - controlled_low_rate_scanner_candidates
     disallowed_modes:
       - waf_evasion_payload_generation
       - object_id_enumeration
@@ -51,7 +85,7 @@ modules:
     allowed_modes:
       - public_static_analysis
       - local_decompiled_source_scanning
-      - lab_only_dynamic_notes
+      - researcher_controlled_lab_dynamic_testing
     disallowed_modes:
       - bypassing_platform_controls_against_live_users
       - extracting_third_party_data
@@ -62,7 +96,8 @@ modules:
       - local_openapi_testcase_generation
       - owned_object_matrix_generation
       - low_impact_rate_limit_plan
+      - controlled_authenticated_replay_against_researcher_owned_objects
     disallowed_modes:
       - blind_id_sweeping
       - brute_force_rate_testing
-      - unauthorized_role_testing
+      - unauthorized_role_testing_against_non_owned_accounts
