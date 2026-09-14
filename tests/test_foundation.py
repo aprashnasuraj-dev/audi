@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from halo.adapters.replay_runtime import ReplayRuntimeAdapter
 from halo.identity import IdentityVault
 from halo.input_gate import evaluate_family_input
-from halo.models import FamilyStatus
+from halo.models import FamilyStatus, Identity
 from halo.replay import SAFE_METHODS
 from halo.scope import ScopeGuard
 
@@ -69,3 +70,30 @@ def test_iac_missing_is_skipped(tmp_path: Path):
 
 def test_replay_transport_is_safe_method_only():
     assert SAFE_METHODS == frozenset({"GET", "HEAD"})
+
+
+@pytest.mark.asyncio
+async def test_replay_budget_exhaustion_is_explicit_and_sends_no_request():
+    vault = IdentityVault({
+        "anonymous": Identity("anonymous"),
+        "user": Identity("user", headers={"Authorization": "Bearer synthetic"}),
+    })
+    target = {
+        "allow_hosts": ["example.test"],
+        "limits": {"request_budget": 10, "timeout_seconds": 1},
+    }
+    context = {
+        "request_budget_remaining": 1,
+        "discovered": {
+            "anonymous": {
+                "requests": [{"method": "GET", "url": "https://example.test/api/me"}]
+            }
+        },
+    }
+    findings, coverage = await ReplayRuntimeAdapter().run_for_identities(
+        "demo", target, vault, context=context
+    )
+    assert findings == []
+    assert coverage.status is FamilyStatus.FAILED
+    assert "request budget exhausted" in coverage.reason
+    assert context["request_budget_remaining"] == 1
