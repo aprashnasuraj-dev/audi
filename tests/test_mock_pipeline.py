@@ -106,7 +106,7 @@ async def test_authenticated_navigation_can_grant_exact_flow_host_but_blocks_unr
         assert any(item["host"] == "localhost" for item in context["scope_transitions"])
         assert any(item["identity"] == "user" for item in context["scope_transitions"])
         assert any(
-            item["url"].startswith(f"http://localhost:{port}/flow")
-            for item in context["discovered"]["user"]["urls"]
+            url.startswith(f"http://localhost:{port}/flow")
+            for url in context["discovered"]["user"]["urls"]
         )
         assert any("blocked.invalid" in item["url"] for item in user_meta["blocked_requests"])
