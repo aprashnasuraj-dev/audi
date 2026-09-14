@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 'program/minly-*'
+      - main
     paths:
       - 'programs/minly-vdp/**'
       - '.github/workflows/minly-vdp-readiness.yml'
@@ -47,6 +48,7 @@ jobs:
               'MOBILE_TEST_MATRIX.md',
               'EVIDENCE_CHECKLIST.md',
               'SUBMISSION_TEMPLATE.md',
+              'FINAL_REPORT_FORMAT.md',
               'WORKLOG_TEMPLATE.md',
               'CONFIDENTIALITY.md',
               'RESEARCH_PLAN.md',
@@ -95,6 +97,61 @@ jobs:
           print('Minly VDP blueprint: scope/guardrail/phase-one validation PASS')
           PY
 
+      - name: Validate canonical final-report format
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('programs/minly-vdp')
+          template = (root / 'SUBMISSION_TEMPLATE.md').read_text(encoding='utf-8')
+          rules = (root / 'FINAL_REPORT_FORMAT.md').read_text(encoding='utf-8')
+
+          required_headings = [
+              '# Submission title',
+              '# Target',
+              '# Technical severity',
+              '# VRT Category',
+              '# URL / Location of vulnerability',
+              '# Description',
+              '## Summary',
+              '## Vulnerability details',
+              '## Steps to reproduce',
+              '## Proof of concept',
+              '## Impact',
+              '## Suggested remediation',
+              '# Attachments',
+          ]
+          positions = []
+          for heading in required_headings:
+              pos = template.find(heading)
+              assert pos >= 0, f'missing canonical report heading: {heading}'
+              positions.append(pos)
+          assert positions == sorted(positions), 'canonical report headings are out of order'
+
+          required_phrases = [
+              'As an attacker, I could...',
+              'Verification status',
+              'Verified / Partially verified / Unverified',
+              'under **25,000 characters**',
+              'Do not invent findings',
+              'Every material claim maps to the PoC/evidence section',
+          ]
+          for phrase in required_phrases:
+              assert phrase in template, f'missing report integrity requirement: {phrase}'
+
+          for phrase in [
+              'canonical report structure',
+              'Every material claim must have a concrete proof reference',
+              'The complete content under `# Description`',
+              'Severity and VRT classification must be based on the behavior actually demonstrated',
+          ]:
+              assert phrase in rules, f'missing compilation rule: {phrase}'
+
+          print('Minly VDP final-report schema validation PASS')
+          PY
+
       - name: Reject unsafe blueprint patterns
         shell: bash
         run: |
@@ -111,6 +168,7 @@ jobs:
           printf '%s\n' \
             'Minly VDP participation blueprint' \
             'Contains generic scope, methodology, evidence, and submission templates only.' \
+            'The canonical final report format is SUBMISSION_TEMPLATE.md and FINAL_REPORT_FORMAT.md.' \
             'No live vulnerability details or secrets are permitted in this repository.' \
             > artifacts/minly-vdp-blueprint/MANIFEST.txt
 
