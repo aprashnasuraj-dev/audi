@@ -92,11 +92,13 @@ def web_phase(args: argparse.Namespace) -> int:
     halo_out = out / "halo"
     passive_out = out / "passive"
     out.mkdir(parents=True, exist_ok=True)
+    storage_state = os.environ.get("HALO_MINLY_USER_STORAGE_STATE", "").strip()
 
     manifest: dict[str, Any] = {
         "phase": "web",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "scope": {"url": "https://minly.com/", "exact_host": "minly.com"},
+        "identity_mode": "researcher-storage-state" if storage_state else "anonymous",
         "families": {},
     }
 
@@ -113,15 +115,18 @@ def web_phase(args: argparse.Namespace) -> int:
         (out / "family-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         return cp.returncode
 
-    run([
+    passive_cmd = [
         sys.executable, str(PROGRAM / "minly_passive_map.py"),
         "--output", str(passive_out),
         "--max-pages", str(args.max_pages),
         "--request-budget", str(args.request_budget),
         "--delay-ms", str(args.delay_ms),
         "--settle-ms", "900",
-    ])
-    manifest["families"]["passive-browser-map"] = {"status": "RAN"}
+    ]
+    if storage_state:
+        passive_cmd += ["--storage-state", storage_state]
+    run(passive_cmd)
+    manifest["families"]["passive-browser-map"] = {"status": "RAN", "identity_mode": manifest["identity_mode"]}
 
     temp_js = passive_out / "_temp_js"
     semgrep_raw = passive_out / "semgrep-raw.json"
@@ -149,7 +154,6 @@ def web_phase(args: argparse.Namespace) -> int:
         p.unlink(missing_ok=True)
     shutil.rmtree(temp_js, ignore_errors=True)
 
-    # These HALO families require explicit artifacts/contracts that Minly has not supplied.
     manifest["families"]["api-contract"] = {"status": "SKIPPED", "reason": "no OpenAPI contract supplied"}
     manifest["families"]["graphql-schema"] = {"status": "SKIPPED", "reason": "no GraphQL schema supplied"}
     manifest["families"]["container"] = {"status": "SKIPPED", "reason": "no authorized container image supplied"}
