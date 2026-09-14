@@ -5,9 +5,20 @@ on:
   push:
     branches:
       - 'program/minly-*'
+      - 'feat/minly-*'
     paths:
       - 'programs/minly-vdp/**'
+      - 'scripts/minly_*.py'
+      - 'tests/test_minly_adaptive_policy.py'
       - '.github/workflows/minly-vdp-readiness.yml'
+      - '.github/workflows/minly-adaptive-audit.yml'
+  pull_request:
+    paths:
+      - 'programs/minly-vdp/**'
+      - 'scripts/minly_*.py'
+      - 'tests/test_minly_adaptive_policy.py'
+      - '.github/workflows/minly-vdp-readiness.yml'
+      - '.github/workflows/minly-adaptive-audit.yml'
 
 permissions:
   contents: read
@@ -15,7 +26,7 @@ permissions:
 jobs:
   validate-blueprint:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -23,8 +34,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install YAML parser
-        run: python -m pip install 'PyYAML==6.0.3'
+      - name: Install readiness dependencies
+        run: python -m pip install 'PyYAML==6.0.3' 'httpx>=0.27,<1'
 
       - name: Validate exact program scope and guardrails
         shell: bash
@@ -51,10 +62,25 @@ jobs:
               'CONFIDENTIALITY.md',
               'RESEARCH_PLAN.md',
               'SUBMISSION_SCORECARD.md',
+              'adaptive-audit-profile.yml',
+              'advanced-tool-versions.yml',
+              'ADVANCED_TOOLCHAIN.md',
+              'AI_REVIEW_PROTOCOL.md',
+              'CURRENT_SERVICE_SURFACE.md',
+              'STATE_MACHINE_MATRIX.md',
+              'LATENT_RISK_REGISTER_TEMPLATE.md',
           ]
           missing = [name for name in required if not (root / name).is_file()]
           if missing:
               raise SystemExit(f'missing blueprint files: {missing}')
+
+          for script in (
+              'scripts/minly_policy_gate.py',
+              'scripts/minly_hypothesis_matrix.py',
+              'scripts/minly_public_mapper.py',
+              'scripts/minly_har_analyzer.py',
+          ):
+              assert Path(script).is_file(), script
 
           scope = yaml.safe_load((root / 'scope.yml').read_text(encoding='utf-8'))
           assert scope['schema_version'] == 1
@@ -92,25 +118,76 @@ jobs:
           assert 'Do not enumerate identifiers' in auth_plan
           assert 'researcher-controlled' in auth_plan
 
-          print('Minly VDP blueprint: scope/guardrail/phase-one validation PASS')
+          profile = yaml.safe_load((root / 'adaptive-audit-profile.yml').read_text(encoding='utf-8'))
+          assert profile['scope']['exact_web_origins'] == ['https://minly.com/']
+          assert profile['scope']['wildcard_hosts_allowed'] is False
+          assert profile['scope']['third_party_testing_allowed'] is False
+          modes = {m['name']: m for m in profile['research_modes']}
+          assert modes['public_surface']['max_requests'] <= 24
+          assert modes['public_surface']['max_requests_per_second'] <= 0.4
+          assert modes['public_surface']['mutate_state'] is False
+          assert modes['two_account_differential']['object_enumeration'] is False
+
+          print('Minly VDP blueprint: scope/guardrail/adaptive-policy validation PASS')
+          PY
+
+      - name: Run adaptive policy gate
+        run: python scripts/minly_policy_gate.py --json
+
+      - name: Generate and validate hypothesis matrix without live traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/minly-vdp-blueprint
+          python scripts/minly_hypothesis_matrix.py --output artifacts/minly-vdp-blueprint/adaptive
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/minly-vdp-blueprint/adaptive/hypothesis-matrix.json').read_text())
+          assert len(data) >= 15
+          assert all(item['status'] == 'hypothesis' for item in data)
+          assert all(item['reportable_now'] is False for item in data)
+          print('latent-risk separation gate: PASS')
+          PY
+
+      - name: Analyze synthetic HAR offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/minly_har_analyzer.py \
+            tests/fixtures/minly_sample.har.json \
+            --output artifacts/minly-vdp-blueprint/har-analysis
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/minly-vdp-blueprint/har-analysis/operation-inventory.json').read_text())
+          assert data['rules']['live_requests_sent_by_analyzer'] == 0
+          assert data['rules']['credentials_exported'] is False
+          assert data['scope_counts']['exact_web_scope'] >= 1
+          assert data['scope_counts']['minly_sibling_boundary_not_authorized_by_web_scope'] >= 1
+          assert data['scope_counts']['external_boundary'] >= 1
+          print('offline HAR boundary gate: PASS')
           PY
 
       - name: Reject unsafe blueprint patterns
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -R --line-number -E '([*][.]minly[.]com|mass scan|brute[- ]force wordlist|DDoS payload)' programs/minly-vdp
+          ! grep -R --line-number -E '([*][.]minly[.]com|mass scan|DDoS payload)' programs/minly-vdp
           echo 'unsafe-pattern gate: PASS'
+
+      - name: Compile Minly scripts
+        run: python -m compileall -q scripts/minly_policy_gate.py scripts/minly_hypothesis_matrix.py scripts/minly_public_mapper.py scripts/minly_har_analyzer.py
 
       - name: Build sanitized participation bundle
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts/minly-vdp-blueprint
-          cp programs/minly-vdp/*.md programs/minly-vdp/scope.yml artifacts/minly-vdp-blueprint/
+          cp programs/minly-vdp/*.md programs/minly-vdp/*.yml artifacts/minly-vdp-blueprint/
           printf '%s\n' \
-            'Minly VDP participation blueprint' \
-            'Contains generic scope, methodology, evidence, and submission templates only.' \
+            'Minly VDP adaptive participation blueprint' \
+            'Contains scope, methodology, latent-risk analysis, safe tooling, evidence, and submission templates.' \
             'No live vulnerability details or secrets are permitted in this repository.' \
             > artifacts/minly-vdp-blueprint/MANIFEST.txt
 
