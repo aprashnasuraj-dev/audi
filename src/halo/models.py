@@ -15,8 +15,22 @@ class FamilyStatus(StrEnum):
 @dataclass(frozen=True)
 class Identity:
     name: str
+    role: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     cookies: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        role = self.role.strip().lower()
+        if not role:
+            if self.name == "anonymous":
+                role = "anonymous"
+            elif self.name == "admin" or self.name.endswith("-admin"):
+                role = "admin"
+            else:
+                role = "user"
+        if role not in {"anonymous", "user", "admin"}:
+            raise ValueError(f"unsupported identity role {role!r}")
+        object.__setattr__(self, "role", role)
 
 
 @dataclass(frozen=True)
