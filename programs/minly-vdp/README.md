@@ -45,15 +45,17 @@ Only the first class is directly reportable. This prevents future-risk analysis 
 4. Create a second ordinary researcher-controlled account only when a two-account authorization test is actually required.
 5. Run `scripts/minly_policy_gate.py` before any automated live mapping.
 6. Generate the latent-risk queue with `scripts/minly_hypothesis_matrix.py`.
-7. Use the `Minly Adaptive Audit` workflow in `blueprint`, `public-map`, or `offline-toolchain` mode as appropriate.
-8. Confirm current product paths against `WORKFLOW_MAP.md` and follow `RESEARCH_PLAN.md`.
-9. Use `AUTHORIZATION_TEST_PLAN.md` and `PHASE1_SESSION_CHECKLIST.md` for controlled account-isolation tests.
-10. Use `WEB_TEST_MATRIX.md` or `MOBILE_TEST_MATRIX.md` for broader manual coverage.
-11. Keep traffic low and actions reversible.
-12. Stop immediately if a test crosses an uncontrolled account boundary or exposes non-public third-party data.
-13. Run candidates through `FINDING_ELIGIBILITY_GATE.md` and `SUBMISSION_SCORECARD.md`.
-14. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
-15. Draft confirmed issues with `SUBMISSION_TEMPLATE.md` and submit through Minly's portal.
+7. Use `HIGH_IMPACT_RESEARCH_QUEUE.md` to prioritize P1-P3-capable hypotheses without pre-judging severity.
+8. Use the `Minly Adaptive Audit` workflow in `blueprint`, `public-map`, or `offline-toolchain` mode as appropriate.
+9. If an authenticated HAR/trace is exported from the researcher's normal browser/app use, analyze it **offline** with `scripts/minly_har_analyzer.py`; never commit raw authenticated captures to this public repo.
+10. Confirm current product paths against `WORKFLOW_MAP.md` and `CURRENT_SERVICE_SURFACE.md`, then follow `RESEARCH_PLAN.md`.
+11. Use `AUTHORIZATION_TEST_PLAN.md` and `PHASE1_SESSION_CHECKLIST.md` for controlled account-isolation tests.
+12. Use `STATE_MACHINE_MATRIX.md`, `WEB_TEST_MATRIX.md`, and `MOBILE_TEST_MATRIX.md` for broader manual coverage.
+13. Keep traffic low and actions reversible.
+14. Stop immediately if a test crosses an uncontrolled account boundary or exposes non-public third-party data.
+15. Run candidates through `FINDING_ELIGIBILITY_GATE.md` and `SUBMISSION_SCORECARD.md`.
+16. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
+17. Draft confirmed issues with `SUBMISSION_TEMPLATE.md` and submit through Minly's portal.
 
 ## Repository structure
 
@@ -62,6 +64,10 @@ Only the first class is directly reportable. This prevents future-risk analysis 
 - `advanced-tool-versions.yml` — pinned advanced toolchain and policy-disabled capabilities.
 - `ADVANCED_TOOLCHAIN.md` — live-safe/manual/offline/disabled execution model.
 - `AI_REVIEW_PROTOCOL.md` — evidence labels and AI-assisted trust-boundary/future-risk review.
+- `CURRENT_SERVICE_SURFACE.md` — dated public-service and scope-boundary map.
+- `STATE_MACHINE_MATRIX.md` — account, booking, messaging, event, payment, callback and async transition analysis.
+- `LATENT_RISK_REGISTER_TEMPLATE.md` — private/sanitized structure for tracking future-risk and precursor weaknesses.
+- `HIGH_IMPACT_RESEARCH_QUEUE.md` — prioritized high-impact hypothesis families with minimal safe validation paths.
 - `ACCOUNT_SETUP.md` — researcher-controlled account setup and privacy rules.
 - `WORKFLOW_MAP.md` — normal public/authenticated product workflow map and object inventory.
 - `AUTHORIZATION_TEST_PLAN.md` — manual A/B authorization-isolation methodology using only researcher-owned objects.
@@ -76,11 +82,18 @@ Only the first class is directly reportable. This prevents future-risk analysis 
 - `WORKLOG_TEMPLATE.md` — private-worklog structure; do not commit live findings here.
 - `CONFIDENTIALITY.md` — public-repo data-handling rules.
 
+## Executable helpers
+
+- `scripts/minly_policy_gate.py` — blocks scope expansion, excessive request rates, reportable speculative classes, and unsafe modes.
+- `scripts/minly_hypothesis_matrix.py` — generates a 15+ lens latent-risk research queue with manual-validation rules.
+- `scripts/minly_public_mapper.py` — exact-host, GET-only, low-volume public mapper.
+- `scripts/minly_har_analyzer.py` — zero-network offline operation inventory and scope-boundary classifier for sanitized HAR evidence.
+
 ## Automation
 
 ### `Minly VDP Blueprint Readiness`
 
-Zero-live-traffic validation of exact scope, exclusions, privacy controls, and required blueprint files.
+Zero-live-traffic validation of exact scope, exclusions, privacy controls, adaptive policy, hypothesis/report separation, offline HAR handling, and required blueprint files. It runs for relevant feature branches and PRs.
 
 ### `Minly Adaptive Audit`
 
