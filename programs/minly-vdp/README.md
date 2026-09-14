@@ -29,24 +29,33 @@ Anything else is out of scope unless Minly updates the program in writing.
 
 1. Confirm the current program page and scope before each test session.
 2. Record the date/time of the scope check in `WORKLOG_TEMPLATE.md`.
-3. Select one exact in-scope asset.
-4. Use the checklists in `WEB_TEST_MATRIX.md` or `MOBILE_TEST_MATRIX.md`.
-5. Keep traffic low and actions reversible.
-6. Stop immediately if a test crosses an account boundary or exposes non-public third-party data.
-7. Run the finding through `FINDING_ELIGIBILITY_GATE.md` before spending time on a report.
-8. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
-9. Draft with `SUBMISSION_TEMPLATE.md`.
-10. Submit through Minly's disclosure portal and track acknowledgement/triage dates in the worklog.
+3. Follow the staged priorities in `RESEARCH_PLAN.md`.
+4. Select one exact in-scope asset.
+5. Use `WEB_TEST_MATRIX.md` or `MOBILE_TEST_MATRIX.md`.
+6. Keep traffic low and actions reversible.
+7. Stop immediately if a test crosses an account boundary or exposes non-public third-party data.
+8. Run the candidate through `FINDING_ELIGIBILITY_GATE.md`.
+9. Rank it with `SUBMISSION_SCORECARD.md`.
+10. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
+11. Draft with `SUBMISSION_TEMPLATE.md`.
+12. Submit through Minly's disclosure portal and track acknowledgement/triage dates privately.
 
 ## Repository structure
 
 - `scope.yml` — machine-readable scope and exclusions.
+- `RESEARCH_PLAN.md` — staged research roadmap and time allocation.
 - `FINDING_ELIGIBILITY_GATE.md` — go/no-go gate before reporting.
+- `SUBMISSION_SCORECARD.md` — candidate prioritization rubric.
 - `WEB_TEST_MATRIX.md` — prioritized website testing plan.
 - `MOBILE_TEST_MATRIX.md` — Android/iOS testing plan.
 - `EVIDENCE_CHECKLIST.md` — evidence and redaction requirements.
 - `SUBMISSION_TEMPLATE.md` — human-readable disclosure template.
-- `WORKLOG_TEMPLATE.md` — session and submission record.
+- `WORKLOG_TEMPLATE.md` — private-worklog structure; do not commit live findings here.
+- `CONFIDENTIALITY.md` — public-repo data-handling rules.
+
+## GitHub readiness gate
+
+`.github/workflows/minly-vdp-readiness.yml` performs **zero live security testing**. It validates that the exact Minly scope, exclusions, privacy controls, and blueprint files remain intact and builds a sanitized blueprint artifact. This keeps program preparation auditable without turning GitHub Actions into a prohibited high-volume scanner.
 
 ## Success criteria
 
