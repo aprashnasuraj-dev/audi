@@ -42,6 +42,7 @@ class TargetRun:
             "coverage": [record.to_dict() for record in self.coverage],
             "chains": self.chains,
             "discovery": self.context.get("discovered", {}),
+            "scope_transitions": self.context.get("scope_transitions", []),
             "request_budget_remaining": self.context.get("request_budget_remaining"),
             "technology_profile": self.technology_profile.to_dict() if self.technology_profile else None,
             "publication": self.publication.to_dict() if self.publication else None,
