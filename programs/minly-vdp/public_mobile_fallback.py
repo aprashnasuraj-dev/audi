@@ -125,6 +125,13 @@ def fetch_json(url: str, *, timeout: int = 30) -> tuple[dict[str, Any] | list[An
         return None, {"status": "UNAVAILABLE", "reason": f"{type(exc).__name__}: {exc}"}
 
 
+def _append_fingerprints(out: list[str], value: Any) -> None:
+    if isinstance(value, str) and value.strip():
+        out.append(value.strip())
+    elif isinstance(value, list):
+        out.extend(str(x).strip() for x in value if str(x).strip())
+
+
 def android(args: argparse.Namespace) -> int:
     work = args.workdir.resolve()
     out = args.output.resolve()
@@ -170,18 +177,37 @@ def android(args: argparse.Namespace) -> int:
             f"observed={cert_sha1} expected={args.expected_cert_sha1.lower()}"
         )
 
+    # Cross-check the signing SHA-256 against Google's Digital Asset Links service for
+    # minly.com. The API currently returns sha256Fingerprint as a scalar string; older
+    # or alternate representations may return a list, so handle both without extending
+    # a string into individual characters.
     dal, dal_meta = fetch_json(GOOGLE_DAL_URL)
     official_dal_fingerprints: list[str] = []
     if isinstance(dal, dict):
         for statement in dal.get("statements", []) or []:
+            if not isinstance(statement, dict):
+                continue
             target = statement.get("target") or {}
-            if target.get("androidApp", {}).get("packageName") == ANDROID_PACKAGE:
-                fps = target.get("androidApp", {}).get("certificate", {}).get("sha256Fingerprint") or []
-                official_dal_fingerprints.extend(str(x) for x in fps)
+            android_app = target.get("androidApp") or {}
+            if android_app.get("packageName") == ANDROID_PACKAGE:
+                certificate = android_app.get("certificate") or {}
+                _append_fingerprints(official_dal_fingerprints, certificate.get("sha256Fingerprint"))
+                _append_fingerprints(official_dal_fingerprints, certificate.get("sha256Fingerprints"))
             if target.get("packageName") == ANDROID_PACKAGE:
-                official_dal_fingerprints.extend(str(x) for x in (target.get("sha256CertFingerprints") or []))
-    normalized_dal = {re.sub(r"[^0-9a-f]", "", x.lower()) for x in official_dal_fingerprints}
+                _append_fingerprints(official_dal_fingerprints, target.get("sha256CertFingerprints"))
+
+    normalized_dal = {
+        re.sub(r"[^0-9a-f]", "", value.lower())
+        for value in official_dal_fingerprints
+        if value
+    }
+    normalized_dal.discard("")
     dal_matches_cert = cert_sha256 in normalized_dal if cert_sha256 and normalized_dal else None
+    if normalized_dal and cert_sha256 and not dal_matches_cert:
+        raise SystemExit(
+            "public Android artifact certificate did not match minly.com's published Digital Asset Links certificate: "
+            f"observed={cert_sha256} published={sorted(normalized_dal)}"
+        )
 
     result = {
         "platform": "android",
@@ -206,7 +232,7 @@ def android(args: argparse.Namespace) -> int:
         },
         "google_digital_asset_links": {
             "fetch": dal_meta,
-            "published_sha256_fingerprints": sorted(official_dal_fingerprints),
+            "published_sha256_fingerprints": sorted(set(official_dal_fingerprints)),
             "observed_cert_matches_published_sha256": dal_matches_cert,
         },
         "xapk_apk_members": [p.name for p in apks],
@@ -220,6 +246,7 @@ def android(args: argparse.Namespace) -> int:
         "xapk_sha256": download_meta["sha256"],
         "base_apk_sha256": result["base_apk"]["sha256"],
         "cert_sha1": cert_sha1,
+        "cert_sha256": cert_sha256,
         "digital_asset_link_cert_match": dal_matches_cert,
         "base_apk_path": str(base),
     }, indent=2))
