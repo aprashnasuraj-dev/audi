@@ -15,10 +15,11 @@ def enrich_threat_model(findings: list[Finding]) -> list[Finding]:
     enriched: list[Finding] = []
     for finding in findings:
         evidence = dict(finding.evidence)
-        if "auth" in finding.rule_id or "identity" in finding.rule_id:
+        rule = finding.rule_id.lower()
+        if any(token in rule for token in ("auth", "identity", "nonadmin", "admin-surface", "access")):
             threat = "authorization"
             asset = "authenticated application data"
-        elif "secret" in finding.rule_id:
+        elif "secret" in rule:
             threat = "information-disclosure"
             asset = "confidential data"
         else:
@@ -69,8 +70,6 @@ class ReproductionVerifier:
 
         if finding.rule_id == "halo.nonadmin-admin-surface-access":
             identity = self.vault.get(str(finding.identity))
-            # Compare to anonymous so the request is exercised twice and the
-            # authenticated 2xx must still reproduce.
             diff = await self.replay.compare(request, identity, self.vault.get("anonymous"))
             return 200 <= diff.a.status_code < 300
 
@@ -84,8 +83,6 @@ class ReproductionVerifier:
             )
             return diff.different
 
-        # Unknown finding types require a dedicated verifier before entering a
-        # report. Failing closed prevents "candidate" from becoming "reported".
         return False
 
     async def verified_only(self, findings: list[Finding]) -> list[Finding]:
