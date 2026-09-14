@@ -12,6 +12,7 @@
 > - Redact passwords, cookies, session tokens, authorization headers, API keys, OAuth material, payment details, and unrelated personal data.
 > - Do not submit Minly-listed out-of-scope issues such as missing security headers without demonstrated vulnerability, version disclosure, self-XSS, low-impact login/logout CSRF, non-sensitive clickjacking, password-policy issues, or scanner-only output.
 > - Testing evidence must involve only researcher-controlled accounts/data. If unexpected non-public data belonging to another user is exposed, stop testing and report immediately.
+> - Mobile artifact/tool output is a **candidate only** until the behavior is manually reproduced on a researcher-controlled device/account and tied to concrete Minly impact.
 
 # Submission title
 
@@ -31,7 +32,7 @@
 
 # URL / Location of vulnerability
 
-`[Full URL, API endpoint, app screen, deep link, or file path]`
+`[Full URL, API endpoint, app screen, deep link, component, or file path]`
 
 # Description
 
@@ -42,6 +43,14 @@
 ## Vulnerability details
 
 `[Explain the root cause or security-control failure, affected parameter/function/object, preconditions, authentication state, and why the behavior is exploitable. Clearly distinguish directly observed behavior from hypotheses.]`
+
+For mobile findings, also record when applicable:
+
+- **App version/build:** `[version / build number]`
+- **Device / emulator profile:** `[model/profile]`
+- **OS version:** `[Android/iOS version]`
+- **Researcher-controlled account role/state:** `[Account A / Account B / logged out / creator / user, etc.]`
+- **Affected mobile surface:** `[screen / deep link / exported component / WebView / extension / backend endpoint observed from app]`
 
 ## Steps to reproduce
 
@@ -70,6 +79,10 @@
 ### Visual evidence
 
 `[Screenshot/video filename and exactly what it demonstrates, when applicable.]`
+
+### Mobile artifact evidence
+
+`[If relevant, reference only the sanitized artifact-analysis output that led to manual testing. State explicitly that the tool signal itself was not treated as the vulnerability.]`
 
 ### Verification status
 
@@ -125,4 +138,6 @@ Before submission, confirm all of the following:
 - [ ] Raw requests/responses and screenshots are included where useful and fully redacted.
 - [ ] No Minly-listed out-of-scope issue is being submitted without a demonstrated in-scope vulnerability.
 - [ ] Only researcher-controlled accounts/data were intentionally used.
+- [ ] For mobile findings, app version/build, device/OS, affected screen/component/deep link/API, and manual reproduction context are recorded where applicable.
+- [ ] Mobile scanner/static-analysis output was not promoted to a confirmed finding without a concrete manual PoC.
 - [ ] No secrets, session material, payment data, or unrelated personal data remain in attachments.
