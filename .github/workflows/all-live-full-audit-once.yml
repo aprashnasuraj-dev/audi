@@ -30,6 +30,9 @@ jobs:
           python -m pip install -U pip
           python -m pip install -e '.[all]'
 
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
       - name: Repository integrity gates
         run: |
           python -m pytest -q
@@ -79,9 +82,6 @@ jobs:
               assert item.get('operational_identities') == ['anonymous'], item
           print('all-live preflight: READY for 4 public-surface targets')
           PY
-
-      - name: Install Chromium
-        run: python -m playwright install --with-deps chromium
 
       - name: Install and verify pinned Trivy
         shell: bash
