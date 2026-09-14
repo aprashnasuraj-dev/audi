@@ -41,6 +41,7 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
         context["request_budget_remaining"] = max(0, remaining - result.total_requests)
         discovered = context.setdefault("discovered", {})
         discovered[identity.name] = {
+            "role": identity.role,
             "urls": result.urls,
             "requests": result.requests,
             "responses": result.responses,
@@ -49,6 +50,7 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
         }
         context["scope_transitions"] = policy.provenance()
         metadata = {
+            "identity_role": identity.role,
             "url_count": len(result.urls),
             "request_count": result.total_requests,
             "request_budget_remaining": context["request_budget_remaining"],
