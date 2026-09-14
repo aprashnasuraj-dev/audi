@@ -1,0 +1,91 @@
+schema_version: 1
+program: Minly VDP
+profile: adaptive-risk-v2
+
+scope:
+  exact_web_origins:
+    - https://minly.com/
+  mobile:
+    ios_app_store_id: "1528802350"
+    android_package: com.minly.users
+  wildcard_hosts_allowed: false
+  third_party_testing_allowed: false
+
+research_modes:
+  - name: public_surface
+    live: true
+    authentication: none
+    allowed_methods: [GET, HEAD]
+    max_requests: 24
+    max_requests_per_second: 0.4
+    follow_cross_host_redirects: false
+    mutate_state: false
+  - name: own_account_manual
+    live: true
+    authentication: researcher_owned_account
+    automation: browser_assisted_only
+    max_requests: 40
+    max_requests_per_second: 0.5
+    mutate_state: reversible_own_account_only
+  - name: two_account_differential
+    live: true
+    authentication: two_researcher_owned_accounts
+    automation: manual_replay_only
+    object_enumeration: false
+    mutate_only_owned_objects: true
+  - name: offline_artifact_analysis
+    live: false
+    inputs: [redacted_har, redacted_trace, android_apk, ios_ipa, exported_schema, source_snapshot]
+
+risk_classes:
+  confirmed_exploitable:
+    reportable: true
+    requires: [manual_reproduction, demonstrated_security_impact, in_scope_asset]
+  security_weakness:
+    reportable: false
+    promotion_requires: [concrete_abuse_path, manual_proof]
+  latent_vulnerability:
+    reportable: false
+    description: Current safety depends on a fragile assumption, control, feature flag, client behavior, or deployment property.
+  attack_path_precursor:
+    reportable: false
+    description: Weakness that may become material only when chained with another condition.
+  security_enhancement:
+    reportable: false
+    description: Defensive improvement with no demonstrated exploitability.
+
+priority_lenses:
+  - object_ownership_and_authorization
+  - role_and_entitlement_transitions
+  - session_and_recovery_state_machine
+  - business_logic_invariants
+  - payment_booking_and_order_state_integrity
+  - creator_customer_boundary
+  - callback_redirect_and_deep_link_trust
+  - upload_media_and_content_trust
+  - webview_native_bridge_boundaries
+  - mobile_backend_authorization_parity
+  - asynchronous_jobs_and_stale_authorization
+  - cache_and_cdn_authorization_consistency
+  - feature_flags_and_hidden_capabilities
+  - server_controlled_vs_client_controlled_fields
+  - privacy_and_data_minimization_boundaries
+  - abuse_resistance_for_high_impact_actions
+
+stop_conditions:
+  - another_users_non_public_data_is_observed
+  - proof_is_already_sufficient
+  - any_destructive_or_irreversible_action_would_be_required
+  - traffic_may_degrade_service
+  - request_leaves_explicit_minly_scope_for_testing
+  - test_requires_guessing_or_enumerating_unowned_identifiers
+
+submission_gate:
+  scanner_only_output: reject
+  best_practice_only: reject
+  speculative_future_risk_only: reject
+  manual_poc: required
+  clear_impact: required
+  minimal_reproduction: required
+  redact_secrets: required
+  redact_unrelated_user_data: required

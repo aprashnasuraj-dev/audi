@@ -1,0 +1,33 @@
+schema_version: 1
+updated: "2026-09-14"
+tools:
+  trivy:
+    version: "0.74.0"
+    execution_class: offline_only
+  semgrep:
+    version: "1.177.0"
+    execution_class: offline_only
+  bandit:
+    version: "1.9.4"
+    execution_class: offline_only
+  mitmproxy:
+    version: "12.2.2"
+    execution_class: manual_only
+  pip_audit:
+    version: "2.10.1"
+    execution_class: offline_only
+  playwright:
+    version_source: project_dependency
+    execution_class: live_safe
+  httpx:
+    version_source: project_dependency
+    execution_class: live_safe
+
+policy_disabled:
+  - nuclei_bulk_templates
+  - ffuf
+  - gobuster
+  - dirsearch
+  - zap_active_scan
+  - brute_force_wordlists
+  - broad_graphql_query_generation
