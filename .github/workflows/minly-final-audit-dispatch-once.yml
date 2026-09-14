@@ -8,19 +8,47 @@ on:
       - .github/workflows/minly-final-audit-dispatch-once.yml
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
-  dispatch:
+  patch-and-dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Dispatch validated final heavy audit on main
+      - name: Checkout main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+      - name: Patch final workflow setup-java pin on main
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          path='.github/workflows/minly-vdp-final-heavy-audit.yml'
+          old='7a445ee88d4e23b52c33a2039a230077c4367a0b'
+          new='cf277c60eb25467037889841efdb72551f06f6c3'
+          count="$(grep -o "$old" "$path" | wc -l | tr -d ' ')"
+          if [ "$count" -lt 1 ]; then
+            echo "Expected invalid setup-java pin not found; refusing blind rewrite."
+            exit 2
+          fi
+          sed -i "s/$old/$new/g" "$path"
+          grep -q "actions/setup-java@$new" "$path"
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=main" --jq .sha)"
+          content="$(base64 -w0 "$path")"
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${path}" \
+            -f message='ci: fix setup-java pin in Minly final audit' \
+            -f content="$content" \
+            -f sha="$sha" \
+            -f branch='main' >/dev/null
+          echo "Patched $count setup-java reference(s) on main."
+      - name: Dispatch corrected final heavy audit on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sleep 2
           gh workflow run minly-vdp-final-heavy-audit.yml \
             --repo "${GITHUB_REPOSITORY}" \
             --ref main \
@@ -32,4 +60,4 @@ jobs:
             -f request_budget=80 \
             -f delay_ms=1200 \
             -f ios_expected_bundle_id=''
-          echo 'Final Minly audit dispatch requested on main.'
+          echo 'Corrected final Minly audit dispatch requested on main.'
