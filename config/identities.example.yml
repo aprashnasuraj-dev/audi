@@ -1,0 +1,15 @@
+schema_version: 1
+identities:
+  anonymous:
+    role: anonymous
+
+  example-user:
+    role: user
+    storage_state_path: ${HALO_EXAMPLE_USER_STORAGE_STATE}
+    auth_check_url: ${HALO_EXAMPLE_USER_AUTH_CHECK_URL}
+    auth_check_contains: ${HALO_EXAMPLE_USER_AUTH_CHECK_CONTAINS}
+
+  # Header/cookie identities remain supported for APIs and synthetic targets.
+  example-api-user:
+    role: user
+    bearer_token: ${HALO_EXAMPLE_API_TOKEN}

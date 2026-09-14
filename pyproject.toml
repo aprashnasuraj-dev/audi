@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "halo-audit"
+version = "0.1.0"
+description = "Identity-aware, browser-assisted security audit pipeline"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27,<1",
+  "PyYAML>=6.0,<7",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.49,<2"]
+report = ["reportlab>=4,<5"]
+test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<1"]
+all = ["playwright>=1.49,<2", "reportlab>=4,<5", "pytest>=8,<9", "pytest-asyncio>=0.24,<1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["halo*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"

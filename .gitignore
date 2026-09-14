@@ -1,0 +1,29 @@
+# Python/build caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Generated audit output
+artifacts/
+reports/
+
+# Local secrets and browser authentication state
+.env
+.env.*
+!.env.example
+.halo-auth/
+auth/
+storage-state*.json
+*.storage-state.json
+**/storage-state*.json
+playwright/.auth/
+
+# Local editor/OS noise
+.DS_Store
+.vscode/
+.idea/

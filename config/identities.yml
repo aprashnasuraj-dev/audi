@@ -1,0 +1,43 @@
+schema_version: 1
+identities:
+  anonymous:
+    role: anonymous
+
+  # Live browser sessions are intentionally isolated per brand. Point each
+  # STORAGE_STATE variable at a local/runner Playwright storage-state JSON file;
+  # do not commit session files or credentials to this repository.
+  web-user:
+    role: user
+    storage_state_path: ${HALO_WEB_USER_STORAGE_STATE}
+    auth_check_url: ${HALO_WEB_USER_AUTH_CHECK_URL}
+    auth_check_contains: ${HALO_WEB_USER_AUTH_CHECK_CONTAINS}
+
+  networksolutions-user:
+    role: user
+    storage_state_path: ${HALO_NETWORKSOLUTIONS_USER_STORAGE_STATE}
+    auth_check_url: ${HALO_NETWORKSOLUTIONS_USER_AUTH_CHECK_URL}
+    auth_check_contains: ${HALO_NETWORKSOLUTIONS_USER_AUTH_CHECK_CONTAINS}
+
+  bluehost-user:
+    role: user
+    storage_state_path: ${HALO_BLUEHOST_USER_STORAGE_STATE}
+    auth_check_url: ${HALO_BLUEHOST_USER_AUTH_CHECK_URL}
+    auth_check_contains: ${HALO_BLUEHOST_USER_AUTH_CHECK_CONTAINS}
+
+  hostgator-user:
+    role: user
+    storage_state_path: ${HALO_HOSTGATOR_USER_STORAGE_STATE}
+    auth_check_url: ${HALO_HOSTGATOR_USER_AUTH_CHECK_URL}
+    auth_check_contains: ${HALO_HOSTGATOR_USER_AUTH_CHECK_CONTAINS}
+
+  # Isolated credentials for the built-in seeded target.
+  mock-user:
+    role: user
+    bearer_token: ${HALO_MOCK_USER_TOKEN}
+    auth_check_url: http://127.0.0.1:8765/api/me
+    auth_check_contains: '"user": "user"'
+  mock-admin:
+    role: admin
+    bearer_token: ${HALO_MOCK_ADMIN_TOKEN}
+    auth_check_url: http://127.0.0.1:8765/api/me
+    auth_check_contains: '"user": "admin"'

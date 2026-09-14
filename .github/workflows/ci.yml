@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/halo-clean-foundation]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -U pip
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest
+      - run: python -m compileall -q src tests scripts
+
+  mock-foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -U pip
+      - run: python -m pip install -e '.[all]'
+      - run: python -m playwright install --with-deps chromium
+      - name: Phase 2 component acceptance gate
+        run: python -m pytest tests/test_mock_pipeline.py tests/test_web_hardening_publication.py
+
+      - name: Start seeded target for integrated run
+        run: |
+          echo 'HALO_MOCK_USER_TOKEN=user-token' >> "$GITHUB_ENV"
+          echo 'HALO_MOCK_ADMIN_TOKEN=admin-token' >> "$GITHUB_ENV"
+          nohup python scripts/serve-mock.py > /tmp/halo-mock.log 2>&1 &
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8765/ >/dev/null && exit 0
+            sleep 0.5
+          done
+          cat /tmp/halo-mock.log
+          exit 1
+
+      - name: Integrated architecture acceptance gate
+        run: |
+          python scripts/run-audit.py \
+            --target mock-local \
+            --hypothesis \
+            --phase2-gate \
+            --output artifacts/ci
+          test -s artifacts/ci/report.json
+          test -s artifacts/ci/report.md
+          test -s artifacts/ci/report.html
+          test -s artifacts/ci/report.pdf
+          test -s artifacts/ci/findings.sarif
+          test -s artifacts/ci/sbom.cdx.json
+          test -s artifacts/ci/vex.openvex.json
+          python - <<'PY'
+          import json
+          report = json.load(open('artifacts/ci/report.json', encoding='utf-8'))
+          target = report['targets'][0]
+          assert target['publication']['passed'] is True
+          assert target['publication']['coverage_ratio'] == 1.0
+          assert target['canonical_issues']
+          assert all(issue['evidence_sources'] for issue in target['canonical_issues'])
+          assert all(
+              (record['accounting'] is None or record['accounting']['parity_ok'])
+              for record in target['coverage']
+          )
+          PY
+
+      - name: Upload integrated audit proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: halo-ci-proof-${{ github.run_id }}
+          path: artifacts/ci/
+          if-no-files-found: error
+          retention-days: 30
