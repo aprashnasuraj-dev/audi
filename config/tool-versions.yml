@@ -1,0 +1,6 @@
+schema_version: 1
+tools:
+  trivy:
+    version: "0.74.0"
+    platform: "Linux-64bit"
+    checksums_sha256: "bc701c3c3ee8b9acbea2c23257e41381e3854888f51281616a6ba5dc96963821"
