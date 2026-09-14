@@ -1,0 +1,22 @@
+schema_version: 1
+targets:
+  - name: mock-local
+    url: http://127.0.0.1:8765/
+    allow_hosts:
+      - 127.0.0.1
+    identities:
+      - anonymous
+      - user
+      - admin
+    limits:
+      max_pages: 10
+      request_budget: 100
+      timeout_seconds: 5
+    browser:
+      settle_ms: 250
+    # Optional family inputs. Missing values become explicit SKIPPED states.
+    openapi: null
+    graphql_schema: null
+    container_image: null
+    iac_globs:
+      - infra/**/*.tf
