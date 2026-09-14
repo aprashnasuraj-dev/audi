@@ -21,15 +21,21 @@ targets:
     identities:
       - anonymous
       - example-user
-    require_authenticated_identity: true
+
+    # required: missing authenticated session blocks the run.
+    # optional: use authenticated session if available, otherwise run the exact
+    # public seed surface anonymously and report the coverage limitation.
+    # anonymous-only: intentionally disable authenticated coverage.
+    authentication_mode: optional
 
     technologies:
       - web
 
-    # Publication fails if a required family does not successfully execute.
+    # In optional mode, only capabilities that can always execute belong here.
+    # runtime-verification will run automatically when a verified authenticated
+    # identity is available; otherwise it is explicitly SKIPPED, not faked.
     required_families:
       - browser-discovery
-      - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
 
