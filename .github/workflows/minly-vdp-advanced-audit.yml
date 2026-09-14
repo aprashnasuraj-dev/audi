@@ -1,0 +1,231 @@
+name: Minly VDP Advanced Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: 'Send bounded traffic to exact in-scope host minly.com'
+        required: true
+        default: 'no'
+        type: choice
+        options:
+          - 'no'
+          - 'yes'
+      enable_hypothesis:
+        description: 'Enable HALO hypothesis/reproduction enrichment'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minly-vdp-advanced-live-audit
+  cancel-in-progress: false
+
+jobs:
+  advanced-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MINLY_USER_A_STORAGE_STATE_B64: ${{ secrets.MINLY_USER_A_STORAGE_STATE_B64 }}
+      MINLY_USER_A_AUTH_CHECK_URL_SECRET: ${{ secrets.MINLY_USER_A_AUTH_CHECK_URL }}
+      MINLY_USER_A_AUTH_CHECK_CONTAINS_SECRET: ${{ secrets.MINLY_USER_A_AUTH_CHECK_CONTAINS }}
+      MINLY_USER_B_STORAGE_STATE_B64: ${{ secrets.MINLY_USER_B_STORAGE_STATE_B64 }}
+      MINLY_USER_B_AUTH_CHECK_URL_SECRET: ${{ secrets.MINLY_USER_B_AUTH_CHECK_URL }}
+      MINLY_USER_B_AUTH_CHECK_CONTAINS_SECRET: ${{ secrets.MINLY_USER_B_AUTH_CHECK_CONTAINS }}
+      MINLY_ARTIFACT_PASSPHRASE: ${{ secrets.MINLY_ARTIFACT_PASSPHRASE }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install audit runtime
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e '.[all]'
+          python -m playwright install --with-deps chromium
+
+      - name: Enforce Minly program boundary before any traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          path = Path('programs/minly-vdp/audit/targets.yml')
+          raw = yaml.safe_load(path.read_text())
+          targets = raw['targets']
+          assert len(targets) == 1
+          target = targets[0]
+          assert target['name'] == 'minly-web'
+          assert target['url'] == 'https://minly.com/'
+          assert target['allow_hosts'] == ['minly.com']
+          assert target.get('authenticated_flow_suffixes') in (None, [])
+          assert target.get('authenticated_flow_hosts') in (None, [])
+          assert '*.minly.com' in target.get('deny_hosts', [])
+          limits = target['limits']
+          assert int(limits['max_pages']) <= 12
+          assert int(limits['request_budget']) <= 120
+          assert float(limits['max_requests_per_second']) <= 0.5
+          assert limits['stop_on_429'] is True
+          assert target.get('openapi') is None
+          assert target.get('graphql_schema') is None
+          assert target.get('container_image') is None
+          assert target.get('iac_globs') == []
+          print('Minly exact-scope and low-volume gate: PASS')
+          PY
+
+      - name: Prepare optional researcher-owned browser sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .halo-auth/minly
+
+          prepare_identity() {
+            local label="$1"
+            local b64="$2"
+            local auth_url="$3"
+            local auth_marker="$4"
+            local upper
+            upper="$(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')"
+            if [[ -z "$b64" || -z "$auth_url" || -z "$auth_marker" ]]; then
+              echo "Minly Account ${upper}: session capability unavailable; workflow will not fabricate authentication."
+              return 0
+            fi
+            local state_path="$PWD/.halo-auth/minly/user-${label}.json"
+            printf '%s' "$b64" | base64 --decode > "$state_path"
+            chmod 600 "$state_path"
+            python - "$state_path" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1], encoding='utf-8'))
+          assert isinstance(payload.get('cookies', []), list)
+          assert isinstance(payload.get('origins', []), list)
+          print('storage-state JSON validation: PASS')
+          PY
+            printf 'MINLY_USER_%s_STORAGE_STATE=%s\n' "$upper" "$state_path" >> "$GITHUB_ENV"
+            printf 'MINLY_USER_%s_AUTH_CHECK_URL=%s\n' "$upper" "$auth_url" >> "$GITHUB_ENV"
+            printf 'MINLY_USER_%s_AUTH_CHECK_CONTAINS=%s\n' "$upper" "$auth_marker" >> "$GITHUB_ENV"
+            echo "Minly Account ${upper}: authenticated session capability prepared."
+          }
+
+          prepare_identity a "${MINLY_USER_A_STORAGE_STATE_B64:-}" "${MINLY_USER_A_AUTH_CHECK_URL_SECRET:-}" "${MINLY_USER_A_AUTH_CHECK_CONTAINS_SECRET:-}"
+          prepare_identity b "${MINLY_USER_B_STORAGE_STATE_B64:-}" "${MINLY_USER_B_AUTH_CHECK_URL_SECRET:-}" "${MINLY_USER_B_AUTH_CHECK_CONTAINS_SECRET:-}"
+
+      - name: Zero-traffic preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/minly-private artifacts/minly-public
+          python scripts/preflight.py \
+            --targets programs/minly-vdp/audit/targets.yml \
+            --identities programs/minly-vdp/audit/identities.yml \
+            --target minly-web \
+            --json > artifacts/minly-private/preflight.json
+          python - <<'PY'
+          import json
+          p = json.load(open('artifacts/minly-private/preflight.json'))
+          assert p['ready'] is True, p
+          t = p['targets'][0]
+          assert t['target'] == 'minly-web'
+          print('Minly zero-traffic preflight: READY')
+          print('Operational identities:', ', '.join(t.get('operational_identities') or []))
+          PY
+
+      - name: Require encrypted evidence storage for live run
+        if: ${{ inputs.run_live == 'yes' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${MINLY_ARTIFACT_PASSPHRASE:-}" ]]; then
+            echo 'MINLY_ARTIFACT_PASSPHRASE secret is required before a live audit in this public repository.' >&2
+            exit 2
+          fi
+
+      - name: Run bounded exact-host Minly audit
+        if: ${{ inputs.run_live == 'yes' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          extra=()
+          if [[ "${{ inputs.enable_hypothesis }}" == 'true' ]]; then
+            extra+=(--hypothesis)
+          fi
+          python scripts/run-audit.py \
+            --targets programs/minly-vdp/audit/targets.yml \
+            --identities programs/minly-vdp/audit/identities.yml \
+            --target minly-web \
+            --output artifacts/minly-private/report \
+            "${extra[@]}"
+
+      - name: Build authorization-first candidate map
+        if: ${{ inputs.run_live == 'yes' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/minly_analyze_report.py \
+            artifacts/minly-private/report/report.json \
+            --output artifacts/minly-private/candidates
+
+      - name: Produce public-safe run summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          preflight = json.load(open('artifacts/minly-private/preflight.json'))
+          summary = {
+              'program': 'Minly VDP',
+              'target': 'minly.com',
+              'scope_mode': 'exact-host-only',
+              'live_traffic_requested': '${{ inputs.run_live }}' == 'yes',
+              'preflight_ready': bool(preflight.get('ready')),
+              'operational_identity_count': len((preflight['targets'][0].get('operational_identities') or [])),
+              'finding_details_withheld': True,
+              'reason': 'Public repository; live evidence remains encrypted/confidential.',
+          }
+          report_path = Path('artifacts/minly-private/report/report.json')
+          if report_path.is_file():
+              report = json.loads(report_path.read_text())
+              target = report['targets'][0]
+              summary['canonical_issue_count_before_program_filter'] = len(target.get('canonical_issues') or [])
+              summary['coverage'] = {row['family']: row['status'] for row in target.get('coverage') or []}
+              candidates = Path('artifacts/minly-private/candidates/candidate-map.json')
+              if candidates.is_file():
+                  c = json.loads(candidates.read_text())
+                  summary['human_review_candidate_count'] = len(c.get('submission_candidates') or [])
+                  summary['authorization_endpoint_candidate_count'] = len(c.get('authorization_candidates') or [])
+          Path('artifacts/minly-public/summary.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Encrypt confidential live evidence
+        if: ${{ inputs.run_live == 'yes' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C artifacts -czf /tmp/minly-private-evidence.tgz minly-private
+          printf '%s' "$MINLY_ARTIFACT_PASSPHRASE" | \
+            openssl enc -aes-256-cbc -pbkdf2 -iter 250000 -salt \
+              -in /tmp/minly-private-evidence.tgz \
+              -out artifacts/minly-public/minly-private-evidence.tgz.enc \
+              -pass stdin
+          sha256sum artifacts/minly-public/minly-private-evidence.tgz.enc > artifacts/minly-public/minly-private-evidence.tgz.enc.sha256
+          rm -f /tmp/minly-private-evidence.tgz
+          rm -rf artifacts/minly-private
+
+      - name: Upload safe audit bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: minly-vdp-audit-${{ github.run_id }}
+          path: artifacts/minly-public/
+          if-no-files-found: error
+          retention-days: 30
