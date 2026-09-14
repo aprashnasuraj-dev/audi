@@ -4,13 +4,14 @@ from itertools import combinations
 from typing import Any
 from urllib.parse import urlsplit
 
+from .base import VaultBoundAdapter
 from ..identity import IdentityVault
 from ..models import CoverageRecord, FamilyStatus, Finding
 from ..replay import CapturedRequest, ReplayTransport
 from ..scope import ScopeGuard
 
 
-class ReplayRuntimeAdapter:
+class ReplayRuntimeAdapter(VaultBoundAdapter):
     name = "identity-replay"
     family = "runtime-verification"
 
@@ -63,10 +64,6 @@ class ReplayRuntimeAdapter:
                         identity_b,
                     )
 
-                    # Seeded/mock and real account-manager guard: a non-admin identity
-                    # receiving 2xx from an obvious admin surface is stronger evidence
-                    # than a generic response difference. Keep this narrow and explicit;
-                    # path semantics alone do not prove a vulnerability elsewhere.
                     if "/admin" in (urlsplit(url).path or "").lower():
                         for name, fp in ((identity_a.name, diff.a), (identity_b.name, diff.b)):
                             if name not in {"anonymous", "admin"} and 200 <= fp.status_code < 300:
