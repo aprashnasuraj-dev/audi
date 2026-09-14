@@ -34,6 +34,11 @@ jobs:
       - run: python -m pip install -e '.[all]'
       - run: python -m playwright install --with-deps chromium
 
+      - name: Install pinned Trivy
+        run: |
+          bash scripts/install-trivy.sh
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
       - name: Start seeded mock target when requested
         if: ${{ inputs.target == 'mock-local' || inputs.target == '' }}
         run: |
