@@ -1,74 +1,128 @@
-# Minly Vulnerability Submission Template
+# Minly Submission-Ready Vulnerability Report Template
 
 > Keep this report confidential until Minly confirms disclosure is permitted.
+>
+> **Human-review rules:**
+> - Do not invent findings. If something is unverified, label it **Unverified** and do not present it as a confirmed vulnerability.
+> - Map every security claim to a concrete proof of concept or directly observed evidence.
+> - For impact, explicitly answer **"As an attacker, I could..."** and describe real-world consequences such as unauthorized data exposure, account takeover, financial loss, unauthorized state changes, or other demonstrated harm.
+> - Keep the complete `# Description` section under **25,000 characters**.
+> - Use clear, numbered reproduction steps.
+> - Include minimal raw HTTP requests/responses, screenshots, or video evidence where they materially prove the issue.
+> - Redact passwords, cookies, session tokens, authorization headers, API keys, OAuth material, payment details, and unrelated personal data.
+> - Do not submit Minly-listed out-of-scope issues such as missing security headers without demonstrated vulnerability, version disclosure, self-XSS, low-impact login/logout CSRF, non-sensitive clickjacking, password-policy issues, or scanner-only output.
+> - Testing evidence must involve only researcher-controlled accounts/data. If unexpected non-public data belonging to another user is exposed, stop testing and report immediately.
 
-## Title
+# Submission title
 
-`[Impact] in [feature] allows [unauthorized result]`
+`[Vulnerability type] in [component] allows [specific unauthorized result]`
 
-## In-scope asset
+# Target
 
-- Asset: `minly.com` / Minly iOS / Minly Android
-- Exact location: `<URL, screen, deep link, or API operation>`
-- App version (if mobile): `<version>`
-- Platform/OS/browser: `<details>`
+`[Minly Website / iOS App / Android App]`
+
+# Technical severity
+
+`[Critical / High / Medium / Low / Informational — based on VRT and demonstrated impact]`
+
+# VRT Category
+
+`[Exact VRT category, for example: Cross-Site Scripting (XSS) > Stored]`
+
+# URL / Location of vulnerability
+
+`[Full URL, API endpoint, app screen, deep link, or file path]`
+
+# Description
 
 ## Summary
 
-A concise description of the security boundary that fails and the resulting impact.
+`[In 1–2 sentences: what is the vulnerability, where does it occur, and what security boundary fails?]`
 
-## Preconditions
+## Vulnerability details
 
-- Researcher-controlled account(s): `<Account A / Account B roles>`
-- Required feature/state: `<state>`
-- No third-party user data was accessed: `Yes`
+`[Explain the root cause or security-control failure, affected parameter/function/object, preconditions, authentication state, and why the behavior is exploitable. Clearly distinguish directly observed behavior from hypotheses.]`
 
 ## Steps to reproduce
 
-1. `<step>`
-2. `<step>`
-3. `<step>`
-4. `<minimal proof step>`
+1. `[Create/use researcher-controlled account and establish the required state.]`
+2. `[Navigate to the affected feature or send the minimum required request.]`
+3. `[Change only the parameter/state necessary to demonstrate the issue.]`
+4. `[Observe the unauthorized or security-relevant result.]`
+5. `[Optional minimal confirmation step, only if needed to prove impact.]`
 
-## Expected result
+## Proof of concept
 
-Describe the authorization/security decision that should occur.
+`[Include the minimum evidence required to prove the finding. Every material claim above should be traceable to evidence here.]`
 
-## Actual result
+### Request
 
-Describe only the behavior actually observed.
-
-## Security impact
-
-Explain the concrete consequence. Keep demonstrated impact separate from hypothetical escalation.
-
-## Proof of concept / evidence
-
-Include only the minimum necessary evidence. Redact passwords, cookies, tokens, API keys, OAuth parameters, and unrelated personal data.
-
-```text
-<minimal redacted request/response or reproduction evidence>
+```http
+[Minimal redacted raw HTTP request, when applicable]
 ```
 
-## Why this is in scope
+### Response
 
-- Affected asset is explicitly listed by the Minly VDP.
-- Testing used only researcher-controlled account(s)/data.
-- The report demonstrates manual impact and does not rely on scanner output alone.
-- The issue is not merely a missing best-practice control or other listed exclusion.
+```http
+[Minimal redacted raw HTTP response showing the security-relevant result, when applicable]
+```
+
+### Visual evidence
+
+`[Screenshot/video filename and exactly what it demonstrates, when applicable.]`
+
+### Verification status
+
+`[Verified / Partially verified / Unverified]`
+
+`[If not fully verified, explain exactly what remains unverified. Never infer or manufacture the missing result.]`
+
+## Impact
+
+**As an attacker, I could...**
+
+`[Complete the sentence with the concrete action demonstrated by the PoC and its real-world consequence. Example pattern: "As an attacker, I could access an object belonging to another account by replacing an object identifier with one from my second researcher-controlled account, exposing data that should be isolated between users."]`
+
+Then document:
+
+- **Who is affected:** `[users / creators / account owners / specific role]`
+- **Data or systems affected:** `[specific data, objects, actions, balances, bookings, messages, media, etc.]`
+- **Worst demonstrated case:** `[maximum impact actually proven without exceeding the VDP]`
+- **Authentication required:** `[Yes/No; role/state]`
+- **User interaction required:** `[Yes/No; explain]`
+- **Scope of impact:** `[single object/account / cross-account / broader, only if demonstrated]`
+- **Limitations of proof:** `[anything deliberately not tested because of safety/scope]`
+
+Do not convert hypothetical escalation into demonstrated impact. If an escalation path was not safely verified, label it **Unverified**.
 
 ## Suggested remediation
 
-Describe the security invariant that should be enforced, preferably server-side where applicable. Avoid prescribing unnecessary implementation details.
+`[Give a specific fix tied to the failed security invariant. For authorization issues, prefer server-side object/role ownership enforcement on every affected operation. For input-handling issues, describe the required contextual validation/encoding or other concrete control.]`
 
-## Retest criteria
+Where useful, include retest expectations:
 
-The issue is fixed when:
+1. `[Unauthorized request/action is rejected.]`
+2. `[The same authorized request/action still succeeds for the owner.]`
+3. `[Equivalent web/mobile/API paths enforce the same security boundary.]`
 
-1. `<unauthorized action is rejected>`
-2. `<authorized action continues to work>`
-3. `<alternate route/API/mobile path enforces the same boundary>`
+# Attachments
 
-## Research safety statement
+- `[filename]` — `[what it proves]`
+- `[filename]` — `[what it proves]`
 
-Testing was limited to Minly's explicitly in-scope assets and researcher-controlled accounts. Testing stopped once sufficient proof was obtained. No denial-of-service, high-volume scanning, social engineering, physical testing, or intentional access to another user's non-public data was performed.
+## Final human-review gate
+
+Before submission, confirm all of the following:
+
+- [ ] The affected asset is explicitly in Minly's current scope.
+- [ ] The finding is manually verified or clearly labeled **Unverified**.
+- [ ] No finding or impact claim was invented or inferred beyond the evidence.
+- [ ] Every material claim maps to the PoC/evidence section.
+- [ ] Reproduction steps are numbered, minimal, and reproducible.
+- [ ] The impact section literally contains **"As an attacker, I could..."** followed by a concrete consequence.
+- [ ] Severity and VRT category reflect demonstrated impact rather than theoretical maximum impact.
+- [ ] The `# Description` section is under 25,000 characters.
+- [ ] Raw requests/responses and screenshots are included where useful and fully redacted.
+- [ ] No Minly-listed out-of-scope issue is being submitted without a demonstrated in-scope vulnerability.
+- [ ] Only researcher-controlled accounts/data were intentionally used.
+- [ ] No secrets, session material, payment data, or unrelated personal data remain in attachments.
