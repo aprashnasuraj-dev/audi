@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ def _graphql_operation_from_post_data(post_data: str | None) -> str | None:
 class DiscoveryResult:
     identity: str
     pages: list[str] = field(default_factory=list)
+    page_evidence: list[dict[str, str]] = field(default_factory=list)
     network_urls: list[str] = field(default_factory=list)
     requests: list[dict[str, str]] = field(default_factory=list)
     responses: list[dict[str, object]] = field(default_factory=list)
@@ -76,7 +78,8 @@ class BrowserCrawler:
     static resources may optionally load so SPAs remain functional, but they are
     never added to audit inventory and authentication headers are stripped.
     Request bodies are never retained; GraphQL POSTs expose only an operation
-    name derived in-memory.
+    name derived in-memory. Rendered DOM content is not stored; only a SHA-256
+    fingerprint and page title are retained for navigation-flow evidence.
     """
 
     PASSIVE_RESOURCE_TYPES = frozenset({"stylesheet", "script", "image", "font", "media"})
@@ -295,6 +298,12 @@ class BrowserCrawler:
                 except Exception:
                     continue
                 result.pages.append(final_url)
+                rendered = await page.content()
+                result.page_evidence.append({
+                    "url": final_url,
+                    "title": (await page.title())[:200],
+                    "dom_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                })
                 hrefs = await page.locator("a[href]").evaluate_all(
                     "els => els.map(e => e.getAttribute('href')).filter(Boolean)"
                 )
