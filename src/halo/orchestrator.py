@@ -16,6 +16,7 @@ from .models import CoverageRecord, FamilyStatus, Finding
 
 
 OPTIONAL_INPUT_FAMILIES = ("api-contract", "graphql-schema", "container", "iac")
+DISCOVERY_DEPENDENT_FAMILIES = frozenset({"api-contract", "graphql-schema"})
 
 
 @dataclass
@@ -33,6 +34,7 @@ class TargetRun:
             "coverage": [record.to_dict() for record in self.coverage],
             "chains": self.chains,
             "discovery": self.context.get("discovered", {}),
+            "request_budget_remaining": self.context.get("request_budget_remaining"),
         }
 
 
@@ -71,6 +73,9 @@ async def run_target(
     """Run one target through discovery, replay, gates, and optional Phase 3."""
     run = TargetRun(target=target_name)
     run.context["repo_root"] = str(repo_root.resolve())
+    run.context["request_budget_remaining"] = int(
+        target.get("limits", {}).get("request_budget", 250)
+    )
     identities = [str(name) for name in target.get("identities") or vault.names()]
 
     discovery = BrowserDiscoveryAdapter()
@@ -114,6 +119,15 @@ async def run_target(
                 tools_expected=1,
             ))
             continue
+        if family in DISCOVERY_DEPENDENT_FAMILIES and discovery_coverage.status is not FamilyStatus.RAN:
+            run.coverage.append(CoverageRecord(
+                target=target_name,
+                family=family,
+                status=FamilyStatus.SKIPPED,
+                reason=f"browser discovery prerequisite unavailable: {discovery_coverage.status.value}",
+                tools_expected=1,
+            ))
+            continue
         findings, coverage = await _run_optional_family(
             family,
             target_name,
@@ -137,5 +151,23 @@ async def run_target(
         )
         run.findings = await verifier.verified_only(enriched)
         run.chains = compose_chains(run.findings)
+        failed = bool(verifier.errors or verifier.budget_exhausted)
+        run.coverage.append(CoverageRecord(
+            target=target_name,
+            family="reproduction-verification",
+            status=FamilyStatus.FAILED if failed else FamilyStatus.RAN,
+            reason="; ".join(verifier.errors[:5]) if verifier.errors else (
+                "request budget exhausted during reproduction" if verifier.budget_exhausted else ""
+            ),
+            tools_expected=1,
+            tools_executed=0 if failed else 1,
+            findings=len(run.findings),
+            metadata={
+                "reproduced": verifier.reproduced,
+                "rejected": verifier.rejected,
+                "errors": len(verifier.errors),
+                "request_budget_remaining": run.context.get("request_budget_remaining"),
+            },
+        ))
 
     return run
