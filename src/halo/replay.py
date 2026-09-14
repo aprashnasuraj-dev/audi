@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,8 +81,12 @@ class ReplayTransport:
             if k.lower() not in {"authorization", "cookie", "host", "content-length"}
         }
         headers.update(identity.headers)
-        async with httpx.AsyncClient(follow_redirects=False, timeout=self.timeout) as client:
-            response = await client.request(method, url, headers=headers, cookies=identity.cookies)
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=self.timeout,
+            cookies=identity.cookies,
+        ) as client:
+            response = await client.request(method, url, headers=headers)
         return _fingerprint(response)
 
     async def compare(self, request: CapturedRequest, identity_a: Identity, identity_b: Identity) -> ReplayDiff:
