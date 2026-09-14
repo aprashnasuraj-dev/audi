@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any
 
 from .canonical import CanonicalIssue
+from .identity import authentication_mode
 from .integrity import PARITY_REQUIRED_FAMILIES
 from .models import CoverageRecord, FamilyStatus
 
@@ -15,6 +16,7 @@ class PublicationDecision:
     coverage_ratio: float
     required_families: list[str]
     ran_required_families: list[str]
+    authentication_mode: str = "optional"
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     authenticated_identities: list[str] = field(default_factory=list)
@@ -32,11 +34,14 @@ def evaluate_publication(
     hypothesis_enabled: bool,
 ) -> PublicationDecision:
     by_family = {record.family: record for record in coverage}
+    mode = authentication_mode(target)
     required = set(target.get("required_families") or [
         "browser-discovery",
         "runtime-verification",
         "web-hardening",
     ])
+    if mode == "required":
+        required.add("runtime-verification")
     if hypothesis_enabled:
         required.add("reproduction-verification")
 
@@ -98,8 +103,14 @@ def evaluate_publication(
                 if transition not in scope_transitions:
                     scope_transitions.append(transition)
 
-    if bool(target.get("require_authenticated_identity")) and not authenticated_identities:
+    if mode == "required" and not authenticated_identities:
         errors.append("target requires authenticated coverage but no non-anonymous identity was verified")
+    elif mode == "optional" and not authenticated_identities:
+        warnings.append(
+            "authenticated coverage was unavailable; publication represents the public/anonymous surface only"
+        )
+    elif mode == "anonymous-only":
+        warnings.append("authenticated coverage intentionally disabled by authentication_mode=anonymous-only")
 
     for transition in scope_transitions:
         if str(transition.get("identity_role", "")).lower() == "anonymous":
@@ -136,6 +147,7 @@ def evaluate_publication(
         coverage_ratio=ratio,
         required_families=sorted(required),
         ran_required_families=sorted(ran_required),
+        authentication_mode=mode,
         errors=errors,
         warnings=warnings,
         authenticated_identities=sorted(authenticated_identities),
