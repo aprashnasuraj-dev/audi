@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from http.server import ThreadingHTTPServer
 
-from tests.mock_target import MockHandler
+from halo.mock_target import MockHandler
 
 
 if __name__ == "__main__":
