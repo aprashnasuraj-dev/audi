@@ -1,0 +1,38 @@
+schema_version: 1
+targets:
+  - name: minly-web
+    url: https://minly.com/
+    live_target: true
+    scope_snapshot: "2026-09-14"
+    scope_max_age_days: 30
+    allow_hosts:
+      - minly.com
+    deny_hosts:
+      - "*.minly.com"
+    identities:
+      - anonymous
+      - minly-user-a
+      - minly-user-b
+    authentication_mode: optional
+    technologies:
+      - web
+    required_families:
+      - browser-discovery
+      - runtime-verification
+    minimum_coverage_ratio: 1.0
+    scope_note: "Minly VDP authorizes the website minly.com. This audit intentionally treats sibling subdomains as out of scope unless Minly explicitly adds them. No navigation-derived scope expansion is permitted."
+    limits:
+      max_pages: 12
+      request_budget: 120
+      timeout_seconds: 10
+      max_requests_per_second: 0.5
+      max_retry_after_seconds: 30
+      stop_on_429: true
+    browser:
+      settle_ms: 1200
+      allow_third_party_resources: true
+    openapi: null
+    graphql_schema: null
+    container_image: null
+    iac_globs: []
+    source_root: null
