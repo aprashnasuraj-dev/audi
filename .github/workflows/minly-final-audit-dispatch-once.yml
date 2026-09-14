@@ -1,0 +1,35 @@
+name: Minly Final Audit Dispatch Once
+
+on:
+  push:
+    branches:
+      - run/minly-final-audit-20260914
+    paths:
+      - .github/workflows/minly-final-audit-dispatch-once.yml
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch validated final heavy audit on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run minly-vdp-final-heavy-audit.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref main \
+            -f confirm_current_scope=true \
+            -f run_web=true \
+            -f run_android=true \
+            -f run_ios=true \
+            -f max_pages=12 \
+            -f request_budget=80 \
+            -f delay_ms=1200 \
+            -f ios_expected_bundle_id=''
+          echo 'Final Minly audit dispatch requested on main.'
