@@ -45,6 +45,7 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
             "urls": result.urls,
             "requests": result.requests,
             "responses": result.responses,
+            "websockets": result.websockets,
             "authentication_verified": result.authentication_verified,
             "authentication_reason": result.authentication_reason,
         }
@@ -53,6 +54,7 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
             "identity_role": identity.role,
             "url_count": len(result.urls),
             "request_count": result.total_requests,
+            "websocket_count": len(result.websockets),
             "request_budget_remaining": context["request_budget_remaining"],
             "budget_exhausted": result.budget_exhausted,
             "authentication_verified": result.authentication_verified,
