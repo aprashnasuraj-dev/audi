@@ -36,9 +36,10 @@ targets:
     iac_globs:
       - infra/**/*.tf
 
-  # Authorized program seed targets. Exact hosts are permanent seeds. A sibling
-  # subdomain is never statically allowed: it can become FLOW_ALLOWED only after
-  # a verified authenticated top-level navigation from an already-authorized page.
+  # Authorized program seed targets. Exact hosts are permanent seeds. If an
+  # authenticated browser session is available it may unlock a provenance-bound
+  # sibling navigation for that run. If session material is absent, HALO stays on
+  # the exact seed and publishes public-surface coverage only.
   - name: web-app
     url: https://app.web.com/
     live_target: true
@@ -55,15 +56,14 @@ targets:
     identities:
       - anonymous
       - web-user
-    require_authenticated_identity: true
+    authentication_mode: optional
     technologies:
       - web
     required_families:
       - browser-discovery
-      - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_note: "Exact app.web.com is a seed. Arbitrary *.web.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
+    scope_note: "Exact app.web.com is a seed. Arbitrary *.web.com enumeration is out of scope. Verified authenticated navigation may grant an exact sibling host when a session exists; otherwise the run remains on the anonymous public seed surface."
     limits:
       max_pages: 35
       request_budget: 350
@@ -96,15 +96,14 @@ targets:
     identities:
       - anonymous
       - networksolutions-user
-    require_authenticated_identity: true
+    authentication_mode: optional
     technologies:
       - web
     required_families:
       - browser-discovery
-      - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_note: "Exact www.networksolutions.com is a seed. Arbitrary *.networksolutions.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
+    scope_note: "Exact www.networksolutions.com is a seed. Arbitrary *.networksolutions.com enumeration is out of scope. Verified authenticated navigation may grant an exact sibling host when a session exists; otherwise the run remains on the anonymous public seed surface."
     limits:
       max_pages: 35
       request_budget: 350
@@ -137,15 +136,14 @@ targets:
     identities:
       - anonymous
       - bluehost-user
-    require_authenticated_identity: true
+    authentication_mode: optional
     technologies:
       - web
     required_families:
       - browser-discovery
-      - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_note: "Exact www.bluehost.com is a seed. Arbitrary *.bluehost.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
+    scope_note: "Exact www.bluehost.com is a seed. Arbitrary *.bluehost.com enumeration is out of scope. Verified authenticated navigation may grant an exact sibling host when a session exists; otherwise the run remains on the anonymous public seed surface."
     limits:
       max_pages: 35
       request_budget: 350
@@ -178,15 +176,14 @@ targets:
     identities:
       - anonymous
       - hostgator-user
-    require_authenticated_identity: true
+    authentication_mode: optional
     technologies:
       - web
     required_families:
       - browser-discovery
-      - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
-    scope_note: "Exact www.hostgator.com is a seed. app.gator.com remains denied. Arbitrary *.hostgator.com enumeration is out of scope; only verified authenticated browser navigation may grant an exact sibling host for that run."
+    scope_note: "Exact www.hostgator.com is a seed. app.gator.com remains denied. Arbitrary *.hostgator.com enumeration is out of scope. Verified authenticated navigation may grant an exact sibling host when a session exists; otherwise the run remains on the anonymous public seed surface."
     limits:
       max_pages: 35
       request_budget: 350
