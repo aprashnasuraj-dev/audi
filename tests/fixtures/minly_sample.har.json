@@ -1,0 +1,56 @@
+{
+  "log": {
+    "version": "1.2",
+    "creator": {"name": "synthetic", "version": "1"},
+    "entries": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://minly.com/profile?userId=researcher-a",
+          "headers": [{"name": "Cookie", "value": "session=fake"}]
+        },
+        "response": {
+          "status": 200,
+          "content": {
+            "mimeType": "application/json",
+            "text": "{\"userId\":\"researcher-a\",\"status\":\"active\"}"
+          }
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://minly.com/api/request/1234567890",
+          "headers": [{"name": "Authorization", "value": "Bearer fake"}],
+          "postData": {
+            "mimeType": "application/json",
+            "text": "{\"requestId\":\"1234567890\",\"recipientId\":\"researcher-a\",\"price\":100}"
+          }
+        },
+        "response": {
+          "status": 201,
+          "content": {
+            "mimeType": "application/json",
+            "text": "{\"requestId\":\"1234567890\",\"status\":\"submitted\"}"
+          }
+        }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://merch.minly.com/products/example",
+          "headers": []
+        },
+        "response": {"status": 200, "content": {"mimeType": "text/html", "text": "<html></html>"}}
+      },
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/analytics",
+          "headers": []
+        },
+        "response": {"status": 204, "content": {"mimeType": "text/plain", "text": ""}}
+      }
+    ]
+  }
+}
