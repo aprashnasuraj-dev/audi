@@ -12,6 +12,18 @@ Only the following assets are treated as in scope:
 
 Anything else is out of scope unless Minly updates the program in writing.
 
+## Adaptive audit model
+
+The audit tracks more than already-exploitable bugs, but it keeps evidence classes separate:
+
+1. **Confirmed exploitable issue** — manually reproduced with demonstrated impact; may become a submission.
+2. **Security weakness** — concrete weakness that still needs proof of abuse.
+3. **Latent vulnerability** — current safety depends on a fragile assumption or control.
+4. **Attack-path precursor** — weakness likely to matter only when combined with another condition.
+5. **Security enhancement** — defensive improvement without demonstrated exploitability.
+
+Only the first class is directly reportable. This prevents future-risk analysis from being mislabeled as a vulnerability while still letting the audit surface conditions that could become dangerous as Minly evolves.
+
 ## Non-negotiable guardrails
 
 - Use only accounts created and controlled by the researcher.
@@ -28,29 +40,33 @@ Anything else is out of scope unless Minly updates the program in writing.
 ## Working sequence
 
 1. Confirm the current program page and scope before each test session.
-2. Record the date/time of the scope check in `WORKLOG_TEMPLATE.md`.
-3. Create and prepare exactly two ordinary researcher-controlled accounts using `ACCOUNT_SETUP.md`.
-4. Confirm the current product paths against `WORKFLOW_MAP.md`.
-5. Follow the staged priorities in `RESEARCH_PLAN.md`.
-6. Use `AUTHORIZATION_TEST_PLAN.md` and `PHASE1_SESSION_CHECKLIST.md` for the first two-account authorization pass.
-7. Select one exact in-scope asset.
-8. Use `WEB_TEST_MATRIX.md` or `MOBILE_TEST_MATRIX.md` for broader manual coverage.
-9. Keep traffic low and actions reversible.
-10. Stop immediately if a test crosses an uncontrolled account boundary or exposes non-public third-party data.
-11. Run the candidate through `FINDING_ELIGIBILITY_GATE.md`.
-12. Rank it with `SUBMISSION_SCORECARD.md`.
-13. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
-14. Draft with `SUBMISSION_TEMPLATE.md`.
-15. Submit through Minly's disclosure portal and track acknowledgement/triage dates privately.
+2. Record the date/time of the scope check privately.
+3. Use the existing researcher-controlled account for normal-use workflow mapping.
+4. Create a second ordinary researcher-controlled account only when a two-account authorization test is actually required.
+5. Run `scripts/minly_policy_gate.py` before any automated live mapping.
+6. Generate the latent-risk queue with `scripts/minly_hypothesis_matrix.py`.
+7. Use the `Minly Adaptive Audit` workflow in `blueprint`, `public-map`, or `offline-toolchain` mode as appropriate.
+8. Confirm current product paths against `WORKFLOW_MAP.md` and follow `RESEARCH_PLAN.md`.
+9. Use `AUTHORIZATION_TEST_PLAN.md` and `PHASE1_SESSION_CHECKLIST.md` for controlled account-isolation tests.
+10. Use `WEB_TEST_MATRIX.md` or `MOBILE_TEST_MATRIX.md` for broader manual coverage.
+11. Keep traffic low and actions reversible.
+12. Stop immediately if a test crosses an uncontrolled account boundary or exposes non-public third-party data.
+13. Run candidates through `FINDING_ELIGIBILITY_GATE.md` and `SUBMISSION_SCORECARD.md`.
+14. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
+15. Draft confirmed issues with `SUBMISSION_TEMPLATE.md` and submit through Minly's portal.
 
 ## Repository structure
 
-- `scope.yml` — machine-readable scope and exclusions.
-- `ACCOUNT_SETUP.md` — two ordinary researcher-controlled account setup and privacy rules.
+- `scope.yml` — original machine-readable scope and exclusions.
+- `adaptive-audit-profile.yml` — v2 execution limits, risk classes, stop conditions, and priority lenses.
+- `advanced-tool-versions.yml` — pinned advanced toolchain and policy-disabled capabilities.
+- `ADVANCED_TOOLCHAIN.md` — live-safe/manual/offline/disabled execution model.
+- `AI_REVIEW_PROTOCOL.md` — evidence labels and AI-assisted trust-boundary/future-risk review.
+- `ACCOUNT_SETUP.md` — researcher-controlled account setup and privacy rules.
 - `WORKFLOW_MAP.md` — normal public/authenticated product workflow map and object inventory.
 - `AUTHORIZATION_TEST_PLAN.md` — manual A/B authorization-isolation methodology using only researcher-owned objects.
 - `PHASE1_SESSION_CHECKLIST.md` — first-session execution checklist and stop conditions.
-- `RESEARCH_PLAN.md` — staged research roadmap and time allocation.
+- `RESEARCH_PLAN.md` — staged adaptive research roadmap and time allocation.
 - `FINDING_ELIGIBILITY_GATE.md` — go/no-go gate before reporting.
 - `SUBMISSION_SCORECARD.md` — candidate prioritization rubric.
 - `WEB_TEST_MATRIX.md` — prioritized website testing plan.
@@ -60,9 +76,21 @@ Anything else is out of scope unless Minly updates the program in writing.
 - `WORKLOG_TEMPLATE.md` — private-worklog structure; do not commit live findings here.
 - `CONFIDENTIALITY.md` — public-repo data-handling rules.
 
-## GitHub readiness gate
+## Automation
 
-`.github/workflows/minly-vdp-readiness.yml` performs **zero live security testing**. It validates that the exact Minly scope, exclusions, privacy controls, and blueprint files remain intact and builds a sanitized blueprint artifact. This keeps program preparation auditable without turning GitHub Actions into a prohibited high-volume scanner.
+### `Minly VDP Blueprint Readiness`
+
+Zero-live-traffic validation of exact scope, exclusions, privacy controls, and required blueprint files.
+
+### `Minly Adaptive Audit`
+
+Three explicit modes:
+
+- `blueprint` — policy validation plus a 15+ lens latent-risk hypothesis matrix; no live target traffic.
+- `public-map` — exact-host, GET-only, maximum 12-page map of `https://minly.com/`, at least 2.5 seconds between requests, no form submission, no cross-host redirect following.
+- `offline-toolchain` — installs and inventories advanced analysis tools without contacting Minly.
+
+Bulk template scanners, directory brute-forcers, broad GraphQL generation, active ZAP scanning, and brute-force wordlists are intentionally disabled by policy.
 
 ## Success criteria
 
@@ -75,3 +103,5 @@ A submission is ready only when it is:
 - supported by a clear security impact rather than a best-practice claim;
 - documented with minimal, privacy-preserving evidence;
 - free of secrets, unrelated user data, and internal tooling noise.
+
+The broader audit can still be successful even if it produces zero submissions: latent weaknesses and enhancement opportunities are valuable assurance outputs, but they remain clearly separated from vulnerability claims.
