@@ -106,6 +106,7 @@ def render_finding(f: dict[str, Any]) -> str:
         poc_sections += ["### Response", md_code(response, "http")]
     if visual:
         poc_sections += ["### Visual evidence", visual]
+    poc_rendered = "\n\n".join(poc_sections)
     limitations = text(f.get("limitations"))
     impact_detail = text(f.get("impact_details"))
     return f"""# Submission title
@@ -135,7 +136,7 @@ def render_finding(f: dict[str, Any]) -> str:
 {step_text}
 
 ## Proof of concept
-{'\n\n'.join(poc_sections)}
+{poc_rendered}
 
 ### Verification status
 **{text(f.get('status'))}**
@@ -162,8 +163,8 @@ def render_finding(f: dict[str, Any]) -> str:
 
 
 def summarize_halo(data: dict[str, Any]) -> dict[str, Any]:
-    targets = data.get("targets") or [] if isinstance(data, dict) else []
-    findings = data.get("findings") or [] if isinstance(data, dict) else []
+    targets = (data.get("targets") or []) if isinstance(data, dict) else []
+    findings = (data.get("findings") or []) if isinstance(data, dict) else []
     return {
         "available": bool(data),
         "target_count": len(targets) if isinstance(targets, list) else None,
