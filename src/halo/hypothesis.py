@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 import yaml
 
 from .adapters.graphql_schema import _schema_roots
@@ -17,7 +18,6 @@ from .scope import ScopeGuard
 
 
 def enrich_threat_model(findings: list[Finding]) -> list[Finding]:
-    """Attach a compact threat-model interpretation without changing severity."""
     enriched: list[Finding] = []
     for finding in findings:
         evidence = dict(finding.evidence)
@@ -34,6 +34,9 @@ def enrich_threat_model(findings: list[Finding]) -> list[Finding]:
         elif finding.family in {"api-contract", "graphql-schema"}:
             threat = "contract-drift"
             asset = "application interface"
+        elif finding.family == "web-hardening":
+            threat = "browser-policy-hardening"
+            asset = "web response policy"
         else:
             threat = "application-surface"
             asset = "web application"
@@ -47,7 +50,6 @@ def enrich_threat_model(findings: list[Finding]) -> list[Finding]:
 
 
 def compose_chains(findings: list[Finding]) -> list[dict[str, Any]]:
-    """Link related findings by URL/identity; chains are hypotheses, not findings."""
     buckets: dict[tuple[str, str | None], list[Finding]] = {}
     for finding in findings:
         buckets.setdefault((finding.url, finding.identity), []).append(finding)
@@ -82,8 +84,9 @@ class ReproductionVerifier:
         self.repo_root = (repo_root or Path(".")).resolve()
         self.context = context if context is not None else {}
         self.target_name = target_name
+        self.guard = ScopeGuard(tuple(target["allow_hosts"]))
         self.replay = ReplayTransport(
-            ScopeGuard(tuple(target["allow_hosts"])),
+            self.guard,
             timeout=float(target.get("limits", {}).get("timeout_seconds", 10)),
         )
         self._tool_reproduction_cache: dict[str, set[tuple[str, str]]] = {}
@@ -97,9 +100,7 @@ class ReproductionVerifier:
         remaining = int(self.context.setdefault("request_budget_remaining", configured))
         if remaining < count:
             self.budget_exhausted = True
-            raise RuntimeError(
-                f"request budget exhausted during reproduction: need {count}, have {remaining}"
-            )
+            raise RuntimeError(f"request budget exhausted during reproduction: need {count}, have {remaining}")
         self.context["request_budget_remaining"] = remaining - count
 
     async def _replay_status(self, finding: Finding) -> int | None:
@@ -111,6 +112,19 @@ class ReproductionVerifier:
         self._consume_target_requests(2)
         diff = await self.replay.compare(request, identity, identity)
         return diff.a.status_code
+
+    async def _verify_header_absence(self, finding: Finding, header: str) -> bool:
+        identity = self.vault.get(str(finding.identity or "anonymous"))
+        url = self.guard.assert_url(finding.url)
+        self._consume_target_requests(1)
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=float(self.target.get("limits", {}).get("timeout_seconds", 10)),
+            headers=identity.headers,
+            cookies=identity.cookies,
+        ) as client:
+            response = await client.get(url)
+        return response.status_code < 500 and header.lower() not in {key.lower() for key in response.headers}
 
     async def _verify_openapi(self, finding: Finding) -> bool:
         spec_path = (self.repo_root / str(self.target.get("openapi", ""))).resolve()
@@ -139,22 +153,16 @@ class ReproductionVerifier:
             self._tool_reproduction_cache[family] = set()
             return set()
         if family == "container":
-            findings, coverage = await TrivyContainerAdapter().run(
-                self.target_name, str(gate.value)
-            )
+            findings, coverage = await TrivyContainerAdapter().run(self.target_name, str(gate.value))
         elif family == "iac":
-            findings, coverage = await TrivyIaCAdapter().run(
-                self.target_name, [str(path) for path in gate.value]
-            )
+            findings, coverage = await TrivyIaCAdapter().run(self.target_name, [str(path) for path in gate.value])
         else:
             findings, coverage = [], None
         reproduced = set()
         if coverage is not None and coverage.status is FamilyStatus.RAN:
             reproduced = {(item.rule_id, item.url) for item in findings}
         elif coverage is not None:
-            raise RuntimeError(
-                f"{family} reproduction scan did not complete: {coverage.status.value} {coverage.reason}"
-            )
+            raise RuntimeError(f"{family} reproduction scan did not complete: {coverage.status.value} {coverage.reason}")
         self._tool_reproduction_cache[family] = reproduced
         return reproduced
 
@@ -172,26 +180,22 @@ class ReproductionVerifier:
             if not finding.identity or not finding.compared_identity:
                 return False
             self._consume_target_requests(2)
-            diff = await self.replay.compare(
-                request,
-                self.vault.get(finding.identity),
-                self.vault.get(finding.compared_identity),
-            )
+            diff = await self.replay.compare(request, self.vault.get(finding.identity), self.vault.get(finding.compared_identity))
             return diff.different
 
+        if finding.rule_id == "halo.missing-hsts":
+            return await self._verify_header_absence(finding, "Strict-Transport-Security")
+        if finding.rule_id == "halo.missing-csp":
+            return await self._verify_header_absence(finding, "Content-Security-Policy")
         if finding.rule_id == "halo.openapi-undeclared-endpoint":
             return await self._verify_openapi(finding)
-
         if finding.rule_id == "halo.graphql-operation-outside-schema":
             return await self._verify_graphql(finding)
-
         if finding.family in {"container", "iac"}:
             reproduced = await self._repeat_tool_family(finding.family)
             return (finding.rule_id, finding.url) in reproduced
 
-        raise NotImplementedError(
-            f"no reproduction verifier registered for {finding.family}/{finding.rule_id}"
-        )
+        raise NotImplementedError(f"no reproduction verifier registered for {finding.family}/{finding.rule_id}")
 
     async def verified_only(self, findings: list[Finding]) -> list[Finding]:
         verified: list[Finding] = []
@@ -199,9 +203,7 @@ class ReproductionVerifier:
             try:
                 confirmed = await self.verify(finding)
             except Exception as exc:
-                self.errors.append(
-                    f"{finding.rule_id} @ {finding.url}: {type(exc).__name__}: {exc}"
-                )
+                self.errors.append(f"{finding.rule_id} @ {finding.url}: {type(exc).__name__}: {exc}")
                 continue
             if not confirmed:
                 self.rejected += 1

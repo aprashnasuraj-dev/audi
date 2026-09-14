@@ -8,6 +8,13 @@ targets:
       - anonymous
       - mock-user
       - mock-admin
+    technologies:
+      - web
+    required_families:
+      - browser-discovery
+      - runtime-verification
+      - web-hardening
+    minimum_coverage_ratio: 1.0
     limits:
       max_pages: 10
       request_budget: 100

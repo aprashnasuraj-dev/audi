@@ -1,0 +1,58 @@
+cases:
+  - name: electron-global-warning-on-non-electron
+    signal:
+      kind: electron_global_warning
+      context:
+        file_level_evidence: false
+    technologies: [python, web]
+    expected: EXCLUDED
+
+  - name: technology-header-is-recon-only
+    signal:
+      kind: technology_identifying_header
+      context: {}
+    technologies: [web]
+    expected: INFORMATIONAL
+
+  - name: urllib-file-scheme-blocked-by-validation
+    signal:
+      kind: dynamic_urllib
+      context:
+        https_only_validation: true
+        redirect_revalidation: true
+    technologies: [python]
+    expected: EXCLUDED
+
+  - name: popen-argv-without-shell
+    signal:
+      kind: subprocess_popen
+      context:
+        argv_array: true
+        shell: false
+    technologies: [python]
+    expected: EXCLUDED
+
+  - name: python36-warning-outside-supported-runtime
+    signal:
+      kind: python_compatibility
+      context:
+        warned_version: "3.6"
+        supported_min_version: "3.11"
+    technologies: [python]
+    expected: EXCLUDED
+
+  - name: assert-warning-in-tests
+    signal:
+      kind: assert_usage
+      context:
+        test_code: true
+    technologies: [python]
+    expected: EXCLUDED
+
+  - name: yaml-baseloader-warning
+    signal:
+      kind: yaml_load
+      context:
+        loader: BaseLoader
+    technologies: [python]
+    expected: EXCLUDED

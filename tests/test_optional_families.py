@@ -40,6 +40,7 @@ async def test_openapi_present_executes_and_finds_contract_drift(tmp_path: Path)
     )
     assert coverage.status is FamilyStatus.RAN
     assert coverage.tools_executed == 1
+    assert coverage.accounting is not None and coverage.accounting.parity_ok
     assert [f.rule_id for f in findings] == ["halo.openapi-undeclared-endpoint"]
     assert findings[0].identity == "user"
     assert findings[0].url.endswith("/api/hidden")
@@ -68,12 +69,13 @@ async def test_graphql_present_executes_and_finds_observed_operation_outside_sch
     )
     assert coverage.status is FamilyStatus.RAN
     assert coverage.tools_executed == 1
+    assert coverage.accounting is not None and coverage.accounting.parity_ok
     assert [f.rule_id for f in findings] == ["halo.graphql-operation-outside-schema"]
     assert findings[0].evidence["operation"] == "adminPanel"
 
 
 def test_trivy_misconfiguration_parser_preserves_direct_evidence():
-    findings = _misconfig_findings({
+    findings, raw_count = _misconfig_findings({
         "Results": [{
             "Target": "infra/main.tf",
             "Misconfigurations": [{
@@ -84,13 +86,14 @@ def test_trivy_misconfiguration_parser_preserves_direct_evidence():
             }],
         }]
     }, "iac")
+    assert raw_count == 1
     assert len(findings) == 1
     assert findings[0].severity == "high"
     assert findings[0].evidence_grade == "direct"
 
 
 def test_trivy_vulnerability_parser_preserves_package_details():
-    findings = _vulnerability_findings({
+    findings, raw_count = _vulnerability_findings({
         "Results": [{
             "Target": "demo:latest",
             "Vulnerabilities": [{
@@ -102,6 +105,7 @@ def test_trivy_vulnerability_parser_preserves_package_details():
             }],
         }]
     }, "container")
+    assert raw_count == 1
     assert len(findings) == 1
     assert findings[0].severity == "critical"
     assert findings[0].evidence["package"] == "demo-lib"

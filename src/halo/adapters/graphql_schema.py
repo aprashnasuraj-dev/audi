@@ -7,7 +7,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from .base import VaultBoundAdapter
 from ..identity import IdentityVault
-from ..models import CoverageRecord, FamilyStatus, Finding
+from ..integrity import finalize_accounting
+from ..models import CoverageRecord, FamilyStatus, Finding, ResultAccounting
 
 _FIELD = re.compile(r"^\s*([_A-Za-z][_0-9A-Za-z]*)\s*(?:\([^)]*\))?\s*:", re.M)
 _TYPE_BLOCK = re.compile(r"type\s+(Query|Mutation)\s*\{(.*?)\}", re.S)
@@ -65,6 +66,7 @@ class GraphQLSchemaAdapter(VaultBoundAdapter):
                 raise ValueError("GraphQL schema defines no Query/Mutation root fields")
             findings: list[Finding] = []
             observed = 0
+            raw_candidates = 0
             for identity in selected:
                 payload = (ctx.get("discovered") or {}).get(identity.name) or {}
                 for request in payload.get("requests", []):
@@ -78,6 +80,7 @@ class GraphQLSchemaAdapter(VaultBoundAdapter):
                     observed += 1
                     if operation in roots:
                         continue
+                    raw_candidates += 1
                     findings.append(Finding(
                         tool=self.name,
                         family=self.family,
@@ -97,6 +100,11 @@ class GraphQLSchemaAdapter(VaultBoundAdapter):
             coverage.tools_executed = 1
             coverage.findings = len(findings)
             coverage.metadata.update({"schema_root_fields": len(roots), "observed_get_operations": observed})
+            finalize_accounting(coverage, ResultAccounting(
+                raw_result_count=raw_candidates,
+                normalized_count=len(findings),
+                excluded_count=0,
+            ))
             return findings, coverage
         except Exception as exc:
             coverage.status = FamilyStatus.FAILED

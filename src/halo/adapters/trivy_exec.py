@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from pathlib import Path
 from typing import Any
 
-from ..models import CoverageRecord, FamilyStatus, Finding
+from ..integrity import finalize_accounting, scanner_exit_completed
+from ..models import CoverageRecord, FamilyStatus, Finding, ResultAccounting
 
 
 _SEVERITY = {
@@ -37,7 +37,7 @@ async def _run_json(argv: list[str], *, timeout: float = 900) -> dict[str, Any]:
         process.kill()
         await process.communicate()
         raise TimeoutError(f"trivy timed out after {timeout}s") from exc
-    if process.returncode != 0:
+    if not scanner_exit_completed("trivy", int(process.returncode or 0), mode="json"):
         raise RuntimeError(stderr.decode("utf-8", errors="replace")[:2000])
     try:
         return json.loads(stdout.decode("utf-8"))
@@ -45,11 +45,14 @@ async def _run_json(argv: list[str], *, timeout: float = 900) -> dict[str, Any]:
         raise RuntimeError("trivy returned invalid JSON") from exc
 
 
-def _misconfig_findings(payload: dict[str, Any], family: str) -> list[Finding]:
+def _misconfig_findings(payload: dict[str, Any], family: str) -> tuple[list[Finding], int]:
     findings: list[Finding] = []
+    raw_count = 0
     for result in payload.get("Results") or []:
         target = str(result.get("Target") or "")
-        for item in result.get("Misconfigurations") or []:
+        items = result.get("Misconfigurations") or []
+        raw_count += len(items)
+        for item in items:
             findings.append(Finding(
                 tool="trivy",
                 family=family,
@@ -66,14 +69,17 @@ def _misconfig_findings(payload: dict[str, Any], family: str) -> list[Finding]:
                     "references": item.get("References") or [],
                 },
             ))
-    return findings
+    return findings, raw_count
 
 
-def _vulnerability_findings(payload: dict[str, Any], family: str) -> list[Finding]:
+def _vulnerability_findings(payload: dict[str, Any], family: str) -> tuple[list[Finding], int]:
     findings: list[Finding] = []
+    raw_count = 0
     for result in payload.get("Results") or []:
         target = str(result.get("Target") or "")
-        for item in result.get("Vulnerabilities") or []:
+        items = result.get("Vulnerabilities") or []
+        raw_count += len(items)
+        for item in items:
             vuln_id = str(item.get("VulnerabilityID") or "trivy-vulnerability")
             pkg = str(item.get("PkgName") or "")
             findings.append(Finding(
@@ -92,7 +98,7 @@ def _vulnerability_findings(payload: dict[str, Any], family: str) -> list[Findin
                     "primary_url": item.get("PrimaryURL"),
                 },
             ))
-    return findings
+    return findings, raw_count
 
 
 class TrivyIaCAdapter:
@@ -104,12 +110,16 @@ class TrivyIaCAdapter:
         try:
             binary = _trivy_binary()
             findings: list[Finding] = []
+            raw_count = 0
             for path in paths:
                 payload = await _run_json([binary, "config", "--format", "json", path], timeout=timeout)
-                findings.extend(_misconfig_findings(payload, self.family))
+                parsed, observed = _misconfig_findings(payload, self.family)
+                findings.extend(parsed)
+                raw_count += observed
             coverage.tools_executed = 1
             coverage.findings = len(findings)
             coverage.metadata["inputs"] = len(paths)
+            finalize_accounting(coverage, ResultAccounting(raw_count, len(findings), 0))
             return findings, coverage
         except TimeoutError as exc:
             coverage.status = FamilyStatus.TIMEOUT
@@ -132,10 +142,11 @@ class TrivyContainerAdapter:
                 [binary, "image", "--format", "json", "--scanners", "vuln", image],
                 timeout=timeout,
             )
-            findings = _vulnerability_findings(payload, self.family)
+            findings, raw_count = _vulnerability_findings(payload, self.family)
             coverage.tools_executed = 1
             coverage.findings = len(findings)
             coverage.metadata["image"] = image
+            finalize_accounting(coverage, ResultAccounting(raw_count, len(findings), 0))
             return findings, coverage
         except TimeoutError as exc:
             coverage.status = FamilyStatus.TIMEOUT

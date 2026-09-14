@@ -1,24 +1,34 @@
 schema_version: 1
 targets:
-  - name: staging-web
-    url: https://staging.example.org/
+  - name: example-web
+    url: https://example.test/
     allow_hosts:
-      - staging.example.org
-      - "*.staging.example.org"
+      - example.test
     identities:
       - anonymous
       - user
       - admin
+    technologies:
+      - web
+    # Any listed family must RAN for publication to pass. Add optional families
+    # here when their inputs are mandatory for the real target.
+    required_families:
+      - browser-discovery
+      - runtime-verification
+      - web-hardening
+    minimum_coverage_ratio: 1.0
     limits:
       max_pages: 25
       request_budget: 250
       timeout_seconds: 10
     browser:
       settle_ms: 750
-    # Optional family inputs. Absence is reported as SKIPPED with a reason.
-    openapi: contracts/openapi.yml
-    graphql_schema: contracts/schema.graphql
+    # Optional family inputs. Missing values become explicit SKIPPED states.
+    openapi: null
+    graphql_schema: null
     container_image: null
     iac_globs:
       - infra/**/*.tf
-      - deploy/**/*.yaml
+    # Set source_root only when local source for THIS target is available. The
+    # technology resolver never treats the HALO auditor repository as target source.
+    source_root: null

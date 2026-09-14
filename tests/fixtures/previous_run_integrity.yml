@@ -1,0 +1,25 @@
+cases:
+  - name: semgrep-silent-loss-regression
+    accounting:
+      raw_result_count: 76
+      normalized_count: 0
+      excluded_count: 0
+      parse_error_count: 0
+    parity_ok: false
+
+  - name: semgrep-all-results-accounted
+    accounting:
+      raw_result_count: 76
+      normalized_count: 4
+      excluded_count: 72
+      parse_error_count: 0
+      exclusion_reasons:
+        human-reviewed-non-actionable-or-out-of-scope: 72
+    parity_ok: true
+
+  - name: bandit-findings-exit-code
+    tool: bandit
+    mode: json
+    exit_code: 1
+    completed: true
+    raw_result_count: 433

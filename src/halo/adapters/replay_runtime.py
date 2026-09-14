@@ -6,7 +6,8 @@ from urllib.parse import urlsplit
 
 from .base import VaultBoundAdapter
 from ..identity import IdentityVault
-from ..models import CoverageRecord, FamilyStatus, Finding
+from ..integrity import finalize_accounting
+from ..models import CoverageRecord, FamilyStatus, Finding, ResultAccounting
 from ..replay import CapturedRequest, ReplayTransport
 from ..scope import ScopeGuard
 
@@ -60,7 +61,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
         comparisons_completed = 0
         try:
             for identity_a, identity_b in combinations(selected, 2):
-                for (method, url), item in sorted(request_index.items()):
+                for (method, url), _item in sorted(request_index.items()):
                     if remaining < 2:
                         coverage.status = FamilyStatus.FAILED
                         coverage.reason = "request budget exhausted before runtime replay completed"
@@ -71,6 +72,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                             "request_budget_remaining": remaining,
                         })
                         ctx["request_budget_remaining"] = remaining
+                        finalize_accounting(coverage, ResultAccounting(len(findings), len(findings), 0))
                         return findings, coverage
                     diff = await replay.compare(
                         CapturedRequest(method=method, url=url, headers={}),
@@ -104,39 +106,38 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                                         },
                                     ))
 
-                    if not diff.different:
-                        continue
-                    findings.append(Finding(
-                        tool=self.name,
-                        family=self.family,
-                        rule_id="halo.identity-response-differential",
-                        title="Response differs across identities",
-                        severity="medium",
-                        url=url,
-                        identity=identity_a.name,
-                        compared_identity=identity_b.name,
-                        confidence=70,
-                        evidence_grade="differential",
-                        evidence={
-                            "method": method,
-                            "identity_a": {
-                                "name": identity_a.name,
-                                "role": identity_a.role,
-                                "status": diff.a.status_code,
-                                "body_length": diff.a.body_length,
-                                "content_type": diff.a.content_type,
-                                "json_shape": diff.a.json_shape,
+                    if diff.different:
+                        findings.append(Finding(
+                            tool=self.name,
+                            family=self.family,
+                            rule_id="halo.identity-response-differential",
+                            title="Response differs across identities",
+                            severity="medium",
+                            url=url,
+                            identity=identity_a.name,
+                            compared_identity=identity_b.name,
+                            confidence=70,
+                            evidence_grade="differential",
+                            evidence={
+                                "method": method,
+                                "identity_a": {
+                                    "name": identity_a.name,
+                                    "role": identity_a.role,
+                                    "status": diff.a.status_code,
+                                    "body_length": diff.a.body_length,
+                                    "content_type": diff.a.content_type,
+                                    "json_shape": diff.a.json_shape,
+                                },
+                                "identity_b": {
+                                    "name": identity_b.name,
+                                    "role": identity_b.role,
+                                    "status": diff.b.status_code,
+                                    "body_length": diff.b.body_length,
+                                    "content_type": diff.b.content_type,
+                                    "json_shape": diff.b.json_shape,
+                                },
                             },
-                            "identity_b": {
-                                "name": identity_b.name,
-                                "role": identity_b.role,
-                                "status": diff.b.status_code,
-                                "body_length": diff.b.body_length,
-                                "content_type": diff.b.content_type,
-                                "json_shape": diff.b.json_shape,
-                            },
-                        },
-                    ))
+                        ))
             coverage.tools_executed = 1
             coverage.findings = len(findings)
             coverage.metadata.update({
@@ -145,6 +146,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                 "request_budget_remaining": remaining,
             })
             ctx["request_budget_remaining"] = remaining
+            finalize_accounting(coverage, ResultAccounting(len(findings), len(findings), 0))
         except TimeoutError as exc:
             coverage.status = FamilyStatus.TIMEOUT
             coverage.reason = str(exc)

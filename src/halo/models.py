@@ -12,6 +12,45 @@ class FamilyStatus(StrEnum):
     TIMEOUT = "TIMEOUT"
 
 
+@dataclass
+class ResultAccounting:
+    """Loss-accounting invariant for scanner/adapter result ingestion."""
+
+    raw_result_count: int = 0
+    normalized_count: int = 0
+    excluded_count: int = 0
+    parse_error_count: int = 0
+    exclusion_reasons: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def parity_ok(self) -> bool:
+        exclusion_total = sum(int(value) for value in self.exclusion_reasons.values())
+        exclusions_explicit = self.excluded_count == 0 or exclusion_total == self.excluded_count
+        return (
+            self.parse_error_count == 0
+            and self.raw_result_count == self.normalized_count + self.excluded_count
+            and exclusions_explicit
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["parity_ok"] = self.parity_ok
+        data["exclusion_reason_total"] = sum(int(value) for value in self.exclusion_reasons.values())
+        return data
+
+    def merge(self, other: "ResultAccounting") -> "ResultAccounting":
+        reasons = dict(self.exclusion_reasons)
+        for reason, count in other.exclusion_reasons.items():
+            reasons[reason] = reasons.get(reason, 0) + count
+        return ResultAccounting(
+            raw_result_count=self.raw_result_count + other.raw_result_count,
+            normalized_count=self.normalized_count + other.normalized_count,
+            excluded_count=self.excluded_count + other.excluded_count,
+            parse_error_count=self.parse_error_count + other.parse_error_count,
+            exclusion_reasons=reasons,
+        )
+
+
 @dataclass(frozen=True)
 class Identity:
     name: str
@@ -62,8 +101,10 @@ class CoverageRecord:
     identities_attempted: list[str] = field(default_factory=list)
     findings: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
+    accounting: ResultAccounting | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["status"] = self.status.value
+        data["accounting"] = self.accounting.to_dict() if self.accounting else None
         return data

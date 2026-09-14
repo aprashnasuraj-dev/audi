@@ -22,12 +22,7 @@ jobs:
           cache: pip
       - run: python -m pip install -U pip
       - run: python -m pip install -e '.[test]'
-      - run: >-
-          python -m pytest
-          tests/test_foundation.py
-          tests/test_hypothesis_reporting.py
-          tests/test_adapter_contract.py
-          tests/test_optional_families.py
+      - run: python -m pytest
       - run: python -m compileall -q src tests scripts
 
   mock-foundation:
@@ -42,12 +37,12 @@ jobs:
       - run: python -m pip install -e '.[all]'
       - run: python -m playwright install --with-deps chromium
       - name: Phase 2 component acceptance gate
-        run: python -m pytest tests/test_mock_pipeline.py
+        run: python -m pytest tests/test_mock_pipeline.py tests/test_web_hardening_publication.py
 
       - name: Start seeded target for integrated run
         run: |
-          echo 'HALO_USER_TOKEN=user-token' >> "$GITHUB_ENV"
-          echo 'HALO_ADMIN_TOKEN=admin-token' >> "$GITHUB_ENV"
+          echo 'HALO_MOCK_USER_TOKEN=user-token' >> "$GITHUB_ENV"
+          echo 'HALO_MOCK_ADMIN_TOKEN=admin-token' >> "$GITHUB_ENV"
           nohup python scripts/serve-mock.py > /tmp/halo-mock.log 2>&1 &
           for i in $(seq 1 20); do
             curl -fsS http://127.0.0.1:8765/ >/dev/null && exit 0
@@ -56,7 +51,7 @@ jobs:
           cat /tmp/halo-mock.log
           exit 1
 
-      - name: Integrated Phase 2-4 acceptance gate
+      - name: Integrated architecture acceptance gate
         run: |
           python scripts/run-audit.py \
             --target mock-local \
@@ -70,6 +65,19 @@ jobs:
           test -s artifacts/ci/findings.sarif
           test -s artifacts/ci/sbom.cdx.json
           test -s artifacts/ci/vex.openvex.json
+          python - <<'PY'
+          import json
+          report = json.load(open('artifacts/ci/report.json', encoding='utf-8'))
+          target = report['targets'][0]
+          assert target['publication']['passed'] is True
+          assert target['publication']['coverage_ratio'] == 1.0
+          assert target['canonical_issues']
+          assert all(issue['evidence_sources'] for issue in target['canonical_issues'])
+          assert all(
+              (record['accounting'] is None or record['accounting']['parity_ok'])
+              for record in target['coverage']
+          )
+          PY
 
       - name: Upload integrated audit proof
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

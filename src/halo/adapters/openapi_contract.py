@@ -8,7 +8,8 @@ import yaml
 
 from .base import VaultBoundAdapter
 from ..identity import IdentityVault
-from ..models import CoverageRecord, FamilyStatus, Finding
+from ..integrity import finalize_accounting
+from ..models import CoverageRecord, FamilyStatus, Finding, ResultAccounting
 
 
 class OpenAPIContractAdapter(VaultBoundAdapter):
@@ -43,14 +44,14 @@ class OpenAPIContractAdapter(VaultBoundAdapter):
             declared = {str(path) for path in paths}
             discovered = ctx.get("discovered") or {}
             findings: list[Finding] = []
+            raw_candidates = 0
             for identity in selected:
                 payload = discovered.get(identity.name) or {}
                 for url in sorted(set(payload.get("urls") or [])):
                     path = urlsplit(url).path or "/"
-                    if not path.startswith("/api/"):
+                    if not path.startswith("/api/") or path in declared:
                         continue
-                    if path in declared:
-                        continue
+                    raw_candidates += 1
                     findings.append(Finding(
                         tool=self.name,
                         family=self.family,
@@ -66,6 +67,11 @@ class OpenAPIContractAdapter(VaultBoundAdapter):
             coverage.tools_executed = 1
             coverage.findings = len(findings)
             coverage.metadata["declared_paths"] = len(declared)
+            finalize_accounting(coverage, ResultAccounting(
+                raw_result_count=raw_candidates,
+                normalized_count=len(findings),
+                excluded_count=0,
+            ))
             return findings, coverage
         except Exception as exc:
             coverage.status = FamilyStatus.FAILED

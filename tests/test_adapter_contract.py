@@ -7,11 +7,13 @@ from halo.adapters.browser_discovery import BrowserDiscoveryAdapter
 from halo.adapters.graphql_schema import GraphQLSchemaAdapter
 from halo.adapters.openapi_contract import OpenAPIContractAdapter
 from halo.adapters.replay_runtime import ReplayRuntimeAdapter
+from halo.adapters.web_hardening import WebHardeningAdapter
 
 
 NETWORK_ADAPTERS = (
     BrowserDiscoveryAdapter,
     ReplayRuntimeAdapter,
+    WebHardeningAdapter,
     OpenAPIContractAdapter,
     GraphQLSchemaAdapter,
 )

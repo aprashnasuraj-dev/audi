@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..canonical import CanonicalIssue, canonicalize_findings
 from ..orchestrator import TargetRun
 
 
@@ -16,24 +17,36 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _issues(run: TargetRun) -> list[CanonicalIssue]:
+    return run.canonical_issues or canonicalize_findings(run.findings, run.target)
+
+
 def _summary(runs: list[TargetRun]) -> dict[str, Any]:
     per_target: dict[str, Any] = {}
-    total_findings = 0
+    total_issues = 0
+    total_observations = 0
     family_states: Counter[str] = Counter()
     for run in runs:
-        total_findings += len(run.findings)
+        issues = _issues(run)
+        total_issues += len(issues)
+        total_observations += len(run.findings)
         counts = Counter(record.status.value for record in run.coverage)
         for record in run.coverage:
             family_states[f"{record.family}:{record.status.value}"] += 1
         per_target[run.target] = {
-            "findings": len(run.findings),
+            "canonical_issues": len(issues),
+            "observations": len(run.findings),
             "coverage": dict(counts),
             "families": {record.family: record.status.value for record in run.coverage},
+            "publication_passed": run.publication.passed if run.publication else None,
+            "coverage_ratio": run.publication.coverage_ratio if run.publication else None,
         }
     return {
         "generated_at": _now(),
         "targets": len(runs),
-        "findings": total_findings,
+        "findings": total_issues,
+        "canonical_issues": total_issues,
+        "observations": total_observations,
         "per_target": per_target,
         "family_states": dict(family_states),
     }
@@ -44,25 +57,28 @@ def _sarif(runs: list[TargetRun]) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     rules: dict[str, dict[str, Any]] = {}
     for run in runs:
-        for finding in run.findings:
-            rules.setdefault(finding.rule_id, {
-                "id": finding.rule_id,
-                "shortDescription": {"text": finding.title},
+        for issue in _issues(run):
+            rules.setdefault(issue.weakness, {
+                "id": issue.weakness,
+                "shortDescription": {"text": issue.title},
             })
+            first_identity = issue.identities[0] if issue.identities else None
             results.append({
-                "ruleId": finding.rule_id,
-                "level": level.get(finding.severity, "note"),
-                "message": {"text": finding.title},
-                "locations": [{"physicalLocation": {"artifactLocation": {"uri": finding.url}}}],
+                "ruleId": issue.weakness,
+                "level": level.get(issue.severity, "note"),
+                "message": {"text": issue.title},
+                "locations": [{"physicalLocation": {"artifactLocation": {"uri": issue.url}}}],
                 "properties": {
+                    "canonicalId": issue.canonical_id,
+                    "canonicalKey": issue.canonical_key,
                     "target": run.target,
-                    "family": finding.family,
-                    "tool": finding.tool,
-                    "identity": finding.identity,
-                    "comparedIdentity": finding.compared_identity,
-                    "evidenceGrade": finding.evidence_grade,
-                    "confidence": finding.confidence,
-                    "evidence": finding.evidence,
+                    "families": issue.families,
+                    "tools": issue.tools,
+                    "identity": first_identity,
+                    "identities": issue.identities,
+                    "confidence": issue.confidence,
+                    "sourceCount": len(issue.evidence_sources),
+                    "evidenceSources": [source.to_dict() for source in issue.evidence_sources],
                 },
             })
     return {
@@ -92,11 +108,11 @@ def _sbom(repo_root: Path) -> dict[str, Any]:
 def _vex(runs: list[TargetRun]) -> dict[str, Any]:
     statements = []
     for run in runs:
-        for finding in run.findings:
-            if finding.family not in {"dependency-sbom", "container"}:
+        for issue in _issues(run):
+            if not ({"dependency-sbom", "container"} & set(issue.families)):
                 continue
             statements.append({
-                "vulnerability": {"name": finding.rule_id},
+                "vulnerability": {"name": issue.weakness},
                 "products": [{"@id": f"pkg:generic/halo-target/{run.target}"}],
                 "status": "under_investigation",
             })
@@ -118,24 +134,57 @@ def write_bundle(runs: list[TargetRun], out_dir: Path, repo_root: Path) -> dict[
     json_path = out_dir / "report.json"
     json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
-    md_lines = ["# HALO Combined Audit Report", "", f"Generated: {summary['generated_at']}", "",
-                f"Targets: **{summary['targets']}**  ", f"Findings: **{summary['findings']}**", ""]
+    md_lines = [
+        "# HALO Combined Audit Report",
+        "",
+        f"Generated: {summary['generated_at']}",
+        "",
+        f"Targets: **{summary['targets']}**  ",
+        f"Canonical issues: **{summary['canonical_issues']}**  ",
+        f"Verified observations before deduplication: **{summary['observations']}**",
+        "",
+    ]
     for run in runs:
-        md_lines += [f"## {run.target}", "", f"Findings: **{len(run.findings)}**", "", "### Family coverage", ""]
+        issues = _issues(run)
+        md_lines += [f"## {run.target}", "", f"Canonical issues: **{len(issues)}**", f"Observations: **{len(run.findings)}**", ""]
+        if run.publication:
+            state = "PASS" if run.publication.passed else "FAIL"
+            md_lines += [
+                f"### Publication gate: **{state}**",
+                "",
+                f"Required-family coverage: **{run.publication.coverage_ratio:.1%}**",
+            ]
+            for error in run.publication.errors:
+                md_lines.append(f"- ERROR: {error}")
+            for warning in run.publication.warnings:
+                md_lines.append(f"- WARNING: {warning}")
+            md_lines.append("")
+
+        md_lines += ["### Family coverage", ""]
         for record in run.coverage:
             reason = f" — {record.reason}" if record.reason else ""
-            md_lines.append(f"- `{record.family}`: **{record.status.value}**{reason}")
-        md_lines += ["", "### Findings", ""]
-        if not run.findings:
-            md_lines.append("No reportable findings.")
-        for finding in run.findings:
+            parity = ""
+            if record.accounting:
+                parity = (
+                    f" | raw={record.accounting.raw_result_count} "
+                    f"normalized={record.accounting.normalized_count} "
+                    f"excluded={record.accounting.excluded_count} "
+                    f"parity={'OK' if record.accounting.parity_ok else 'FAIL'}"
+                )
+            md_lines.append(f"- `{record.family}`: **{record.status.value}**{reason}{parity}")
+
+        md_lines += ["", "### Canonical issues", ""]
+        if not issues:
+            md_lines.append("No reportable canonical issues.")
+        for issue in issues:
             md_lines += [
-                f"#### {finding.title}",
-                f"- Severity: **{finding.severity}**",
-                f"- Rule: `{finding.rule_id}`",
-                f"- URL: `{finding.url}`",
-                f"- Identity: `{finding.identity or '-'}`",
-                f"- Evidence: `{finding.evidence_grade}` / confidence `{finding.confidence}`",
+                f"#### {issue.title}",
+                f"- Severity: **{issue.severity}**",
+                f"- Weakness: `{issue.weakness}`",
+                f"- Canonical ID: `{issue.canonical_id}`",
+                f"- URL/resource: `{issue.url}`",
+                f"- Corroborating tools: `{', '.join(issue.tools) or '-'}`",
+                f"- Retained evidence sources: **{len(issue.evidence_sources)}**",
                 "",
             ]
     md_path = out_dir / "report.md"
@@ -167,7 +216,7 @@ def write_bundle(runs: list[TargetRun], out_dir: Path, repo_root: Path) -> dict[
         pdf_path.write_text("PDF generation requires reportlab; install halo-audit[report].\n", encoding="utf-8")
     else:
         canvas = Canvas(str(pdf_path), pagesize=A4)
-        width, height = A4
+        _width, height = A4
         y = height - 48
         for raw_line in md_lines:
             line = re.sub(r"[*`#]", "", raw_line)[:110]
