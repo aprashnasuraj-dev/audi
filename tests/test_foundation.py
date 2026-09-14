@@ -35,15 +35,17 @@ def test_identity_vault_resolves_environment(tmp_path: Path, monkeypatch: pytest
     assert vault.get("user").headers["Authorization"] == "Bearer synthetic-user-token"
 
 
-def test_identity_vault_fails_closed_when_secret_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_identity_vault_fails_closed_when_selected_secret_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("HALO_MISSING_TOKEN", raising=False)
     path = tmp_path / "identities.yml"
     path.write_text(
         "schema_version: 1\nidentities:\n  user:\n    bearer_token: ${HALO_MISSING_TOKEN}\n",
         encoding="utf-8",
     )
+    vault = IdentityVault.from_file(path)
+    assert "user" in vault.names()
     with pytest.raises(RuntimeError, match="HALO_MISSING_TOKEN"):
-        IdentityVault.from_file(path)
+        vault.get("user")
 
 
 def test_api_contract_missing_is_skipped(tmp_path: Path):

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("playwright.async_api")
+
 from halo.adapters.browser_discovery import BrowserDiscoveryAdapter
 from halo.adapters.replay_runtime import ReplayRuntimeAdapter
 from halo.identity import IdentityVault
