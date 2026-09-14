@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - program/minly-vdp-blueprint
+      - 'program/minly-*'
     paths:
       - 'programs/minly-vdp/**'
       - '.github/workflows/minly-vdp-readiness.yml'
@@ -38,6 +38,10 @@ jobs:
           required = [
               'README.md',
               'scope.yml',
+              'ACCOUNT_SETUP.md',
+              'WORKFLOW_MAP.md',
+              'AUTHORIZATION_TEST_PLAN.md',
+              'PHASE1_SESSION_CHECKLIST.md',
               'FINDING_ELIGIBILITY_GATE.md',
               'WEB_TEST_MATRIX.md',
               'MOBILE_TEST_MATRIX.md',
@@ -82,7 +86,13 @@ jobs:
           assert scope['report_requirements']['manual_verification'] == 'required'
           assert scope['report_requirements']['clear_security_impact'] == 'required'
 
-          print('Minly VDP blueprint: scope/guardrail validation PASS')
+          account_setup = (root / 'ACCOUNT_SETUP.md').read_text(encoding='utf-8')
+          auth_plan = (root / 'AUTHORIZATION_TEST_PLAN.md').read_text(encoding='utf-8')
+          assert 'Account A' in account_setup and 'Account B' in account_setup
+          assert 'Do not enumerate identifiers' in auth_plan
+          assert 'researcher-controlled' in auth_plan
+
+          print('Minly VDP blueprint: scope/guardrail/phase-one validation PASS')
           PY
 
       - name: Reject unsafe blueprint patterns

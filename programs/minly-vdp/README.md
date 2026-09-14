@@ -29,20 +29,27 @@ Anything else is out of scope unless Minly updates the program in writing.
 
 1. Confirm the current program page and scope before each test session.
 2. Record the date/time of the scope check in `WORKLOG_TEMPLATE.md`.
-3. Follow the staged priorities in `RESEARCH_PLAN.md`.
-4. Select one exact in-scope asset.
-5. Use `WEB_TEST_MATRIX.md` or `MOBILE_TEST_MATRIX.md`.
-6. Keep traffic low and actions reversible.
-7. Stop immediately if a test crosses an account boundary or exposes non-public third-party data.
-8. Run the candidate through `FINDING_ELIGIBILITY_GATE.md`.
-9. Rank it with `SUBMISSION_SCORECARD.md`.
-10. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
-11. Draft with `SUBMISSION_TEMPLATE.md`.
-12. Submit through Minly's disclosure portal and track acknowledgement/triage dates privately.
+3. Create and prepare exactly two ordinary researcher-controlled accounts using `ACCOUNT_SETUP.md`.
+4. Confirm the current product paths against `WORKFLOW_MAP.md`.
+5. Follow the staged priorities in `RESEARCH_PLAN.md`.
+6. Use `AUTHORIZATION_TEST_PLAN.md` and `PHASE1_SESSION_CHECKLIST.md` for the first two-account authorization pass.
+7. Select one exact in-scope asset.
+8. Use `WEB_TEST_MATRIX.md` or `MOBILE_TEST_MATRIX.md` for broader manual coverage.
+9. Keep traffic low and actions reversible.
+10. Stop immediately if a test crosses an uncontrolled account boundary or exposes non-public third-party data.
+11. Run the candidate through `FINDING_ELIGIBILITY_GATE.md`.
+12. Rank it with `SUBMISSION_SCORECARD.md`.
+13. Capture only the minimum evidence required by `EVIDENCE_CHECKLIST.md`.
+14. Draft with `SUBMISSION_TEMPLATE.md`.
+15. Submit through Minly's disclosure portal and track acknowledgement/triage dates privately.
 
 ## Repository structure
 
 - `scope.yml` — machine-readable scope and exclusions.
+- `ACCOUNT_SETUP.md` — two ordinary researcher-controlled account setup and privacy rules.
+- `WORKFLOW_MAP.md` — normal public/authenticated product workflow map and object inventory.
+- `AUTHORIZATION_TEST_PLAN.md` — manual A/B authorization-isolation methodology using only researcher-owned objects.
+- `PHASE1_SESSION_CHECKLIST.md` — first-session execution checklist and stop conditions.
 - `RESEARCH_PLAN.md` — staged research roadmap and time allocation.
 - `FINDING_ELIGIBILITY_GATE.md` — go/no-go gate before reporting.
 - `SUBMISSION_SCORECARD.md` — candidate prioritization rubric.
