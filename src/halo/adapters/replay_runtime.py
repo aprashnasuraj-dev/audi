@@ -61,7 +61,6 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
         try:
             for identity_a, identity_b in combinations(selected, 2):
                 for (method, url), item in sorted(request_index.items()):
-                    # ReplayTransport.compare performs exactly two target requests.
                     if remaining < 2:
                         coverage.status = FamilyStatus.FAILED
                         coverage.reason = "request budget exhausted before runtime replay completed"
@@ -82,9 +81,9 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                     comparisons_completed += 1
 
                     if "/admin" in (urlsplit(url).path or "").lower():
-                        for name, fp in ((identity_a.name, diff.a), (identity_b.name, diff.b)):
-                            if name not in {"anonymous", "admin"} and 200 <= fp.status_code < 300:
-                                key = (name, url)
+                        for identity, fp in ((identity_a, diff.a), (identity_b, diff.b)):
+                            if identity.role == "user" and 200 <= fp.status_code < 300:
+                                key = (identity.name, url)
                                 if key not in seen_authz:
                                     seen_authz.add(key)
                                     findings.append(Finding(
@@ -94,12 +93,13 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                                         title="Non-admin identity reached an admin surface",
                                         severity="high",
                                         url=url,
-                                        identity=name,
+                                        identity=identity.name,
                                         confidence=90,
                                         evidence_grade="differential",
                                         evidence={
                                             "method": method,
                                             "status": fp.status_code,
+                                            "identity_role": identity.role,
                                             "comparison": f"captured/replayed across {identity_a.name} and {identity_b.name}",
                                         },
                                     ))
@@ -121,6 +121,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                             "method": method,
                             "identity_a": {
                                 "name": identity_a.name,
+                                "role": identity_a.role,
                                 "status": diff.a.status_code,
                                 "body_length": diff.a.body_length,
                                 "content_type": diff.a.content_type,
@@ -128,6 +129,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                             },
                             "identity_b": {
                                 "name": identity_b.name,
+                                "role": identity_b.role,
                                 "status": diff.b.status_code,
                                 "body_length": diff.b.body_length,
                                 "content_type": diff.b.content_type,
