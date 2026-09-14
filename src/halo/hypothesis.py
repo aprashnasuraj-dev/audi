@@ -17,6 +17,8 @@ from .models import FamilyStatus, Finding
 from .replay import CapturedRequest, ReplayTransport
 from .scope import ScopePolicy
 
+_HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
+
 
 def enrich_threat_model(findings: list[Finding]) -> list[Finding]:
     enriched: list[Finding] = []
@@ -165,15 +167,53 @@ class ReproductionVerifier:
             and response.headers.get("access-control-allow-credentials", "").strip().lower() == "true"
         )
 
-    async def _verify_openapi(self, finding: Finding) -> bool:
+    def _load_openapi_paths(self) -> dict[str, set[str]]:
         spec_path = (self.repo_root / str(self.target.get("openapi", ""))).resolve()
         spec = yaml.safe_load(spec_path.read_text(encoding="utf-8")) or {}
-        declared = set((spec.get("paths") or {}).keys())
+        paths = spec.get("paths") or {}
+        output: dict[str, set[str]] = {}
+        for path, payload in paths.items():
+            methods = set()
+            if isinstance(payload, dict):
+                methods = {
+                    str(key).lower() for key in payload
+                    if str(key).lower() in _HTTP_METHODS
+                }
+            output[str(path)] = methods
+        return output
+
+    async def _verify_openapi(self, finding: Finding) -> bool:
+        declared = self._load_openapi_paths()
         path = urlsplit(finding.url).path or "/"
-        if path in declared:
-            return False
-        status = await self._replay_status(finding)
-        return status is not None and status not in {404, 410}
+        method = str(finding.evidence.get("method", "GET")).upper()
+        captured = bool(finding.evidence.get("captured_request"))
+
+        if finding.rule_id == "halo.openapi-undeclared-endpoint":
+            if path in declared:
+                return False
+            status = await self._replay_status(finding)
+            if status is not None:
+                return status not in {404, 410}
+            return captured
+
+        if finding.rule_id == "halo.openapi-undeclared-method":
+            if path not in declared:
+                return False
+            allowed = declared[path]
+            normalized = method.lower()
+            if normalized == "head" and "get" in allowed:
+                return False
+            if normalized in allowed:
+                return False
+            # Do not replay POST/PUT/PATCH/DELETE. The browser-observed request is
+            # direct evidence that the method occurred; reproduction revalidates
+            # only the contract mismatch.
+            if method not in {"GET", "HEAD"}:
+                return captured
+            status = await self._replay_status(finding)
+            return status is not None and status not in {404, 410}
+
+        return False
 
     async def _verify_graphql(self, finding: Finding) -> bool:
         schema_path = (self.repo_root / str(self.target.get("graphql_schema", ""))).resolve()
@@ -181,6 +221,9 @@ class ReproductionVerifier:
         operation = str(finding.evidence.get("operation") or "")
         if not operation or operation in roots:
             return False
+        method = str(finding.evidence.get("method", "GET")).upper()
+        if method not in {"GET", "HEAD"}:
+            return bool(finding.evidence.get("captured_request"))
         status = await self._replay_status(finding)
         return status is not None and status not in {404, 410}
 
@@ -242,7 +285,7 @@ class ReproductionVerifier:
             return await self._verify_cookie_attribute_absence(finding, "samesite=")
         if finding.rule_id == "halo.cors-wildcard-with-credentials":
             return await self._verify_cors_wildcard_credentials(finding)
-        if finding.rule_id == "halo.openapi-undeclared-endpoint":
+        if finding.rule_id in {"halo.openapi-undeclared-endpoint", "halo.openapi-undeclared-method"}:
             return await self._verify_openapi(finding)
         if finding.rule_id == "halo.graphql-operation-outside-schema":
             return await self._verify_graphql(finding)
