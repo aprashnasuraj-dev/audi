@@ -48,14 +48,39 @@ def test_chain_composer_is_hypothesis_only():
 @pytest.mark.asyncio
 async def test_reproduction_verifier_retests_seeded_candidate():
     with mock_server() as seed:
-        target = {"url": seed, "allow_hosts": ["127.0.0.1"], "limits": {"timeout_seconds": 5}}
+        target = {
+            "url": seed,
+            "allow_hosts": ["127.0.0.1"],
+            "limits": {"timeout_seconds": 5, "request_budget": 20},
+        }
+        context = {"request_budget_remaining": 20}
         vault = IdentityVault({
             "anonymous": Identity("anonymous"),
             "user": Identity("user", headers={"Authorization": "Bearer user-token"}),
         })
         finding = _finding(url=seed.rstrip("/") + "/api/admin/secret")
-        verifier = ReproductionVerifier(target, vault)
+        verifier = ReproductionVerifier(target, vault, context=context)
         assert await verifier.verify(finding) is True
+        assert context["request_budget_remaining"] == 18
+
+
+@pytest.mark.asyncio
+async def test_unknown_finding_type_is_visible_reproduction_error():
+    target = {
+        "allow_hosts": ["example.test"],
+        "limits": {"request_budget": 10, "timeout_seconds": 1},
+    }
+    vault = IdentityVault({"anonymous": Identity("anonymous")})
+    verifier = ReproductionVerifier(target, vault, context={"request_budget_remaining": 10})
+    unknown = _finding(
+        family="new-family",
+        rule_id="halo.future-rule",
+        url="https://example.test/future",
+        identity="anonymous",
+    )
+    assert await verifier.verified_only([unknown]) == []
+    assert len(verifier.errors) == 1
+    assert "no reproduction verifier registered" in verifier.errors[0]
 
 
 def test_report_bundle_emits_all_phase4_formats(tmp_path: Path):
