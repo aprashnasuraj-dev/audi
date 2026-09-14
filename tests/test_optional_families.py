@@ -47,6 +47,36 @@ async def test_openapi_present_executes_and_finds_contract_drift(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_openapi_detects_observed_method_outside_contract(tmp_path: Path):
+    spec = tmp_path / "openapi.yml"
+    spec.write_text(
+        "openapi: 3.1.0\ninfo: {title: demo, version: '1'}\npaths:\n  /api/me:\n    get: {responses: {'200': {description: ok}}}\n",
+        encoding="utf-8",
+    )
+    target = {"openapi": "openapi.yml"}
+    context = {
+        "repo_root": str(tmp_path),
+        "discovered": {
+            "user": {
+                "urls": [],
+                "requests": [{
+                    "method": "POST",
+                    "url": "https://example.test/api/me",
+                    "resource_type": "fetch",
+                }],
+            }
+        },
+    }
+    findings, coverage = await OpenAPIContractAdapter().run_for_identities(
+        "demo", target, _vault(), identities=["user"], context=context
+    )
+    assert coverage.status is FamilyStatus.RAN
+    assert coverage.accounting is not None and coverage.accounting.parity_ok
+    assert [f.rule_id for f in findings] == ["halo.openapi-undeclared-method"]
+    assert findings[0].evidence["method"] == "POST"
+
+
+@pytest.mark.asyncio
 async def test_graphql_present_executes_and_finds_observed_operation_outside_schema(tmp_path: Path):
     schema = tmp_path / "schema.graphql"
     schema.write_text("type Query { viewer: String }\n", encoding="utf-8")
@@ -72,6 +102,35 @@ async def test_graphql_present_executes_and_finds_observed_operation_outside_sch
     assert coverage.accounting is not None and coverage.accounting.parity_ok
     assert [f.rule_id for f in findings] == ["halo.graphql-operation-outside-schema"]
     assert findings[0].evidence["operation"] == "adminPanel"
+
+
+@pytest.mark.asyncio
+async def test_graphql_post_operation_metadata_is_analyzed_without_body_retention(tmp_path: Path):
+    schema = tmp_path / "schema.graphql"
+    schema.write_text("type Query { viewer: String }\n", encoding="utf-8")
+    target = {"graphql_schema": "schema.graphql"}
+    context = {
+        "repo_root": str(tmp_path),
+        "discovered": {
+            "user": {
+                "urls": [],
+                "requests": [{
+                    "method": "POST",
+                    "url": "https://example.test/graphql",
+                    "resource_type": "fetch",
+                    "graphql_operation": "adminPanel",
+                }],
+            }
+        },
+    }
+    findings, coverage = await GraphQLSchemaAdapter().run_for_identities(
+        "demo", target, _vault(), identities=["user"], context=context
+    )
+    assert coverage.status is FamilyStatus.RAN
+    assert coverage.accounting is not None and coverage.accounting.parity_ok
+    assert [f.rule_id for f in findings] == ["halo.graphql-operation-outside-schema"]
+    assert findings[0].evidence["method"] == "POST"
+    assert findings[0].evidence["request_body_retained"] is False
 
 
 def test_trivy_misconfiguration_parser_preserves_direct_evidence():
