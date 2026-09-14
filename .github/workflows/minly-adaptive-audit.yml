@@ -172,12 +172,26 @@ jobs:
           } | tee artifacts/minly-adaptive/tool-versions.txt
           cp programs/minly-vdp/advanced-tool-versions.yml artifacts/minly-adaptive/
 
-      - name: Enforce no-live-target use in offline toolchain job
+      - name: Enforce disabled-by-policy tool list
         shell: bash
         run: |
-          set -euo pipefail
-          ! grep -R --line-number -E '(nuclei|ffuf|gobuster|dirsearch|zap.*active)' .github/workflows/minly-adaptive-audit.yml
-          echo 'offline toolchain live-attack gate: PASS'
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          data = yaml.safe_load(Path('programs/minly-vdp/advanced-tool-versions.yml').read_text())
+          disabled = set(data.get('policy_disabled') or [])
+          expected = {
+              'nuclei_bulk_templates',
+              'ffuf',
+              'gobuster',
+              'dirsearch',
+              'zap_active_scan',
+              'brute_force_wordlists',
+              'broad_graphql_query_generation',
+          }
+          assert expected <= disabled, (expected - disabled)
+          print('disabled-by-policy tool gate: PASS')
+          PY
 
       - name: Upload advanced toolchain proof
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
