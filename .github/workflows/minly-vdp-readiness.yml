@@ -5,10 +5,12 @@ on:
   push:
     branches:
       - 'program/minly-*'
+      - 'feat/minly-*'
       - main
     paths:
       - 'programs/minly-vdp/**'
       - '.github/workflows/minly-vdp-readiness.yml'
+      - '.github/workflows/minly-vdp-mobile-audit.yml'
 
 permissions:
   contents: read
@@ -46,6 +48,8 @@ jobs:
               'FINDING_ELIGIBILITY_GATE.md',
               'WEB_TEST_MATRIX.md',
               'MOBILE_TEST_MATRIX.md',
+              'MOBILE_TOOLCHAIN.md',
+              'mobile_artifact_inspect.py',
               'EVIDENCE_CHECKLIST.md',
               'SUBMISSION_TEMPLATE.md',
               'FINAL_REPORT_FORMAT.md',
@@ -97,6 +101,58 @@ jobs:
           print('Minly VDP blueprint: scope/guardrail/phase-one validation PASS')
           PY
 
+      - name: Validate Android/iOS offline audit toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile programs/minly-vdp/mobile_artifact_inspect.py
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          wf_path = Path('.github/workflows/minly-vdp-mobile-audit.yml')
+          assert wf_path.is_file(), 'missing Minly mobile audit workflow'
+          text = wf_path.read_text(encoding='utf-8')
+          workflow = yaml.safe_load(text)
+
+          # Manual only: app artifact analysis must never auto-run against a live target.
+          triggers = workflow.get(True) or workflow.get('on') or {}
+          assert 'workflow_dispatch' in triggers
+          assert 'push' not in triggers and 'schedule' not in triggers
+
+          for phrase in [
+              'com.minly.users',
+              '1528802350',
+              'MINLY_ANDROID_APK_URL',
+              'MINLY_ANDROID_APK_SHA256',
+              'MINLY_IOS_IPA_URL',
+              'MINLY_IOS_IPA_SHA256',
+              'androguard',
+              'apktool',
+              'semgrep',
+              'detect-secrets',
+              'lief',
+              'trivy',
+              'codesign',
+              'otool',
+              'manual_validation_required',
+          ]:
+              assert phrase in text, f'missing mobile toolchain requirement: {phrase}'
+
+          guide = Path('programs/minly-vdp/MOBILE_TOOLCHAIN.md').read_text(encoding='utf-8')
+          for phrase in [
+              'candidate',
+              'researcher-controlled',
+              'Do not commit APK/IPA binaries',
+              'report by itself',
+              'App Store ID `1528802350`',
+              'package `com.minly.users`',
+          ]:
+              assert phrase in guide, f'missing mobile methodology guardrail: {phrase}'
+
+          print('Minly Android/iOS toolchain schema validation PASS')
+          PY
+
       - name: Validate canonical final-report format
         shell: bash
         run: |
@@ -140,6 +196,9 @@ jobs:
               'under **25,000 characters**',
               'Do not invent findings',
               'Every material claim maps to the PoC/evidence section',
+              'App version/build',
+              'Device / emulator profile',
+              'Mobile scanner/static-analysis output was not promoted',
           ]
           for phrase in required_phrases:
               assert phrase in template, f'missing report integrity requirement: {phrase}'
@@ -149,6 +208,9 @@ jobs:
               'Every material claim must have a concrete proof reference',
               'The complete content under `# Description`',
               'Severity and VRT classification must be based on the behavior actually demonstrated',
+              'Minly Android App',
+              'Minly iOS App',
+              'manual PoC remains the proof of vulnerability',
           ]:
               assert phrase in rules, f'missing compilation rule: {phrase}'
 
@@ -170,9 +232,9 @@ jobs:
           cp programs/minly-vdp/*.md programs/minly-vdp/scope.yml artifacts/minly-vdp-blueprint/
           printf '%s\n' \
             'Minly VDP participation blueprint' \
-            'Contains generic scope, methodology, evidence, and submission templates only.' \
+            'Contains generic scope, methodology, mobile toolchain, evidence, and submission templates only.' \
             'The canonical final report format is SUBMISSION_TEMPLATE.md and FINAL_REPORT_FORMAT.md.' \
-            'No live vulnerability details or secrets are permitted in this repository.' \
+            'No live vulnerability details, mobile binaries, or secrets are permitted in this repository.' \
             > artifacts/minly-vdp-blueprint/MANIFEST.txt
 
       - name: Upload blueprint artifact
