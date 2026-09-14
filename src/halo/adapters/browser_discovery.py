@@ -94,8 +94,11 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
             "requests": result.requests,
             "responses": result.responses,
             "websockets": result.websockets,
+            "page_evidence": result.page_evidence,
             "edge_profile": edge,
             "auth_flow_hints": auth_hints,
+            "authentication_initial_verified": result.authentication_initial_verified,
+            "authentication_final_verified": result.authentication_final_verified,
             "authentication_verified": result.authentication_verified,
             "authentication_reason": result.authentication_reason,
         }
@@ -107,9 +110,12 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
             "websocket_count": len(result.websockets),
             "request_budget_remaining": context["request_budget_remaining"],
             "budget_exhausted": result.budget_exhausted,
+            "authentication_initial_verified": result.authentication_initial_verified,
+            "authentication_final_verified": result.authentication_final_verified,
             "authentication_verified": result.authentication_verified,
             "authentication_reason": result.authentication_reason,
             "scope_transitions": policy.provenance(),
+            "page_evidence": result.page_evidence[:50],
             "edge_profile": edge,
             "auth_flow_hints": auth_hints,
             "blocked_request_count": len(result.blocked_requests),
@@ -120,7 +126,7 @@ class BrowserDiscoveryAdapter(IdentityAwareAdapter):
         if identity.role != "anonymous" and target.get("require_authenticated_identity"):
             if not result.authentication_verified:
                 raise RuntimeError(
-                    f"authentication was not verified for identity {identity.name!r}: "
+                    f"authentication was not verified at both ends for identity {identity.name!r}: "
                     f"{result.authentication_reason}"
                 )
         if result.budget_exhausted:

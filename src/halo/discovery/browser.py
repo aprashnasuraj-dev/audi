@@ -62,6 +62,8 @@ class DiscoveryResult:
     passive_third_party_requests: list[dict[str, str]] = field(default_factory=list)
     total_requests: int = 0
     budget_exhausted: bool = False
+    authentication_initial_verified: bool = False
+    authentication_final_verified: bool = False
     authentication_verified: bool = False
     authentication_reason: str = ""
     rate_limit_stop: str | None = None
@@ -128,6 +130,8 @@ class BrowserCrawler:
                 ])
 
             auth_verified = identity.role == "anonymous"
+            result.authentication_initial_verified = auth_verified
+            result.authentication_final_verified = auth_verified
             result.authentication_verified = auth_verified
             result.authentication_reason = "anonymous identity" if auth_verified else "authentication not yet verified"
 
@@ -251,10 +255,12 @@ class BrowserCrawler:
             page.on("response", lambda response: asyncio.create_task(observe_response(response)))
             page.on("websocket", observe_websocket)
 
-            if identity.role != "anonymous":
+            async def verify_authentication(stage: str) -> tuple[bool, str]:
+                if identity.role == "anonymous":
+                    return True, "anonymous identity"
                 if not identity.auth_check_url:
-                    result.authentication_reason = "authenticated identity has no auth_check_url"
-                else:
+                    return False, f"{stage} authentication check has no auth_check_url"
+                try:
                     check_url = self.scope.assert_url(identity.auth_check_url)
                     response = await page.goto(check_url, wait_until="domcontentloaded", timeout=20_000)
                     await page.wait_for_timeout(min(self.settle_ms, 500))
@@ -274,9 +280,18 @@ class BrowserCrawler:
                     if not identity.auth_check_selector and not identity.auth_check_contains:
                         ok = False
                         reasons.append("auth check requires selector or text marker")
-                    auth_verified = ok
-                    result.authentication_verified = ok
-                    result.authentication_reason = "verified" if ok else "; ".join(reasons) or "auth check failed"
+                    if result.rate_limit_stop:
+                        return False, f"{stage} authentication check stopped by live-safety control"
+                    return ok, f"{stage} verified" if ok else f"{stage} failed: {'; '.join(reasons) or 'unexpected status'}"
+                except Exception as exc:
+                    return False, f"{stage} authentication check failed: {type(exc).__name__}"
+
+            if identity.role != "anonymous":
+                initial_ok, initial_reason = await verify_authentication("initial")
+                auth_verified = initial_ok
+                result.authentication_initial_verified = initial_ok
+                result.authentication_verified = initial_ok
+                result.authentication_reason = initial_reason
 
             while queue and len(seen) < self.max_pages and not result.budget_exhausted:
                 if result.rate_limit_stop:
@@ -315,6 +330,16 @@ class BrowserCrawler:
                         continue
                     if candidate not in seen and candidate not in queue:
                         queue.append(candidate)
+
+            if identity.role != "anonymous" and not result.budget_exhausted and not result.rate_limit_stop:
+                final_ok, final_reason = await verify_authentication("final")
+                result.authentication_final_verified = final_ok
+                result.authentication_verified = bool(result.authentication_initial_verified and final_ok)
+                result.authentication_reason = (
+                    "initial and final authentication verified"
+                    if result.authentication_verified
+                    else final_reason
+                )
 
             await context.close()
             await browser.close()

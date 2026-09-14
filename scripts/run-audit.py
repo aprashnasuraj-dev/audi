@@ -11,6 +11,7 @@ from halo.identity import IdentityVault
 from halo.integrity import PARITY_REQUIRED_FAMILIES
 from halo.models import FamilyStatus
 from halo.orchestrator import run_target
+from halo.preflight import preflight_target
 from halo.reporting.bundle import write_bundle
 
 
@@ -22,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--targets", type=Path, default=REPO_ROOT / "config" / "targets.yml")
     parser.add_argument("--identities", type=Path, default=REPO_ROOT / "config" / "identities.yml")
     parser.add_argument("--target", action="append", help="target name; repeatable; default is all")
+    parser.add_argument("--live-only", action="store_true", help="run only targets marked live_target")
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "artifacts" / "latest")
     parser.add_argument("--hypothesis", action="store_true", help="enable threat enrichment + reproduction gate")
     parser.add_argument("--phase2-gate", action="store_true", help="require the complete seeded architecture acceptance gate")
@@ -29,12 +31,39 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main_async(args: argparse.Namespace) -> int:
+    if args.target and args.live_only:
+        raise SystemExit("use either --target or --live-only, not both")
     targets = load_targets(args.targets)
     vault = IdentityVault.from_file(args.identities)
-    selected = args.target or list(targets)
+    if args.live_only:
+        selected = [name for name, target in targets.items() if bool(target.get("live_target"))]
+    else:
+        selected = args.target or list(targets)
     missing = sorted(set(selected) - set(targets))
     if missing:
         raise SystemExit(f"unknown target(s): {missing}")
+    if not selected:
+        raise SystemExit("no targets selected")
+
+    # Live runs are impossible until their zero-traffic preflight is READY.
+    preflight_failed = False
+    for name in selected:
+        target = targets[name]
+        if not bool(target.get("live_target")):
+            continue
+        check = preflight_target(name, target, vault, repo_root=REPO_ROOT)
+        if check.ready:
+            print(f"[READY] live preflight: {name}")
+            for warning in check.warnings:
+                print(f"  WARNING: {warning}")
+            continue
+        preflight_failed = True
+        print(f"[BLOCKED] live preflight: {name}")
+        for error in check.errors:
+            print(f"  ERROR: {error}")
+    if preflight_failed:
+        print("[FAIL] no live target traffic was sent because preflight is blocked")
+        return 2
 
     runs = []
     for name in selected:

@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from .privacy import sanitize_for_report
+
 
 class FamilyStatus(StrEnum):
     RAN = "RAN"
@@ -75,9 +77,6 @@ class Identity:
             raise ValueError(f"unsupported identity role {role!r}")
         object.__setattr__(self, "role", role)
         if role != "anonymous" and self.storage_state_path is None and not self.headers and not self.cookies:
-            # The identity can still be declared lazily, but once instantiated it
-            # must carry some authentication material rather than masquerading as
-            # an authenticated role.
             raise ValueError(f"authenticated identity {self.name!r} has no authentication material")
 
 
@@ -96,7 +95,7 @@ class Finding:
     evidence_grade: str = "direct"
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return sanitize_for_report(asdict(self))
 
 
 @dataclass
@@ -116,4 +115,4 @@ class CoverageRecord:
         data = asdict(self)
         data["status"] = self.status.value
         data["accounting"] = self.accounting.to_dict() if self.accounting else None
-        return data
+        return sanitize_for_report(data)

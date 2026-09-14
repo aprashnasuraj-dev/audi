@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from urllib.parse import urlsplit
 
 from .models import Finding
+from .privacy import redact_url_for_evidence, sanitize_for_report
 
 
 _SEVERITY_RANK = {
@@ -32,7 +33,7 @@ class EvidenceSource:
     evidence: dict
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return sanitize_for_report(asdict(self))
 
 
 @dataclass
@@ -52,7 +53,7 @@ class CanonicalIssue:
     known_issue_match: dict | None = None
 
     def to_dict(self) -> dict:
-        return {
+        return sanitize_for_report({
             "canonical_id": self.canonical_id,
             "canonical_key": self.canonical_key,
             "weakness": self.weakness,
@@ -67,7 +68,7 @@ class CanonicalIssue:
             "evidence_sources": [source.to_dict() for source in self.evidence_sources],
             "novelty": self.novelty,
             "known_issue_match": self.known_issue_match,
-        }
+        })
 
 
 def normalized_weakness(finding: Finding) -> str:
@@ -121,7 +122,7 @@ def canonicalize_findings(findings: list[Finding], target: str) -> list[Canonica
                 compared_identity=item.compared_identity,
                 evidence_grade=item.evidence_grade,
                 confidence=item.confidence,
-                evidence=item.evidence,
+                evidence=sanitize_for_report(item.evidence),
             )
             for item in items
         ]
@@ -134,7 +135,7 @@ def canonicalize_findings(findings: list[Finding], target: str) -> list[Canonica
             weakness=weakness,
             title=leader.title,
             severity=leader.severity,
-            url=leader.url,
+            url=redact_url_for_evidence(leader.url),
             confidence=max(item.confidence for item in items),
             families=sorted({item.family for item in items}),
             tools=sorted({item.tool for item in items}),
@@ -166,7 +167,7 @@ def classify_known_issues(issues: list[CanonicalIssue], target: dict) -> None:
         for fingerprint in fingerprints:
             canonical_key = str(fingerprint.get("canonical_key") or "")
             weakness = str(fingerprint.get("weakness") or "")
-            url = str(fingerprint.get("url") or "")
+            url = redact_url_for_evidence(str(fingerprint.get("url") or ""))
             if canonical_key and canonical_key == issue.canonical_key:
                 matched = fingerprint
                 break
@@ -174,4 +175,4 @@ def classify_known_issues(issues: list[CanonicalIssue], target: dict) -> None:
                 matched = fingerprint
                 break
         issue.novelty = "KNOWN" if matched else "UNMATCHED"
-        issue.known_issue_match = matched
+        issue.known_issue_match = sanitize_for_report(matched) if matched else None

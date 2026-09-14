@@ -16,6 +16,7 @@ from .hypothesis import ReproductionVerifier, compose_chains, enrich_threat_mode
 from .identity import IdentityVault
 from .input_gate import evaluate_family_input
 from .models import CoverageRecord, FamilyStatus, Finding
+from .privacy import sanitize_for_report
 from .publication import PublicationDecision, evaluate_publication
 
 
@@ -35,7 +36,7 @@ class TargetRun:
     publication: PublicationDecision | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "target": self.target,
             "observations": [finding.to_dict() for finding in self.findings],
             "canonical_issues": [issue.to_dict() for issue in self.canonical_issues],
@@ -47,6 +48,7 @@ class TargetRun:
             "technology_profile": self.technology_profile.to_dict() if self.technology_profile else None,
             "publication": self.publication.to_dict() if self.publication else None,
         }
+        return sanitize_for_report(payload)
 
 
 async def _run_optional_family(
