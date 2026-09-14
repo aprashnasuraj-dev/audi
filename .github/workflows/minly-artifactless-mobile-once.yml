@@ -14,17 +14,21 @@ concurrency:
 
 jobs:
   mobile-fallback:
-    name: Android public-artifact + iOS metadata fallback
+    name: Complete Android public-static + iOS metadata fallback
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: pip
+      - uses: actions/setup-java@7a445ee88d4e23b52c33a2039a230077c4367a0b
+        with:
+          distribution: temurin
+          java-version: '17'
 
-      - name: Install Android static-analysis toolchain
+      - name: Install complete offline analysis toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -32,75 +36,87 @@ jobs:
           sudo apt-get install -y apktool unzip file binutils default-jre-headless
           python -m pip install -U pip
           python -m pip install 'PyYAML==6.0.3' 'androguard<5' 'mobsfscan<1' 'semgrep<2' 'detect-secrets<2' 'lief<1'
+          bash programs/minly-vdp/install_extended_toolchain.sh android
+          bash scripts/install-trivy.sh
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          export PATH="${HOME}/.local/bin:${PATH}"
           if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/build-tools" ]; then
             bt="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
             echo "$bt" >> "$GITHUB_PATH"
             export PATH="$bt:$PATH"
           fi
-          command -v aapt
-          command -v apksigner
-          python -m py_compile programs/minly-vdp/public_mobile_fallback.py programs/minly-vdp/mobile_static_audit.py
+          for tool in aapt apksigner apktool jadx gitleaks trivy mobsfscan semgrep detect-secrets; do
+            command -v "$tool"
+          done
+          python -m py_compile \
+            programs/minly-vdp/public_mobile_fallback.py \
+            programs/minly-vdp/mobile_static_audit.py \
+            programs/minly-vdp/mobile_artifact_inspect.py \
+            programs/minly-vdp/candidate_ranker.py \
+            programs/minly-vdp/final_audit_runner.py
 
-      - name: Acquire and provenance-check public Minly Android artifact
+      - name: Run provenance-checked Android public fallback through final runner
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts/minly-fallback/android
-          python programs/minly-vdp/public_mobile_fallback.py android \
+          export PATH="${HOME}/.local/bin:${PATH}"
+          mkdir -p artifacts/minly-final
+          python programs/minly-vdp/final_audit_runner.py \
+            --phase android-public \
             --workdir "${RUNNER_TEMP}/minly-public-android" \
-            --output artifacts/minly-fallback/android/public-provenance.json
+            --output artifacts/minly-final
 
-      - name: Run Android static families on provenance-checked base APK
+      - name: Run iOS public metadata/AASA fallback through final runner
         shell: bash
         run: |
           set -euo pipefail
-          apk="${RUNNER_TEMP}/minly-public-android/com.minly.users.apk"
-          test -s "$apk"
-          python programs/minly-vdp/mobile_static_audit.py \
-            --platform android \
-            --artifact "$apk" \
-            --output artifacts/minly-fallback/android \
-            --expected-package com.minly.users
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          out=Path('artifacts/minly-fallback/android')
-          summary=json.loads((out/'summary.json').read_text())
-          provenance=json.loads((out/'public-provenance.json').read_text())
-          summary['status']='RAN_PUBLIC_MIRROR_STATIC'
-          summary['artifact_provenance']=provenance
-          summary['provenance_limitation']='Public mirror artifact; package and signing certificate verified before static analysis. Not claimed byte-identical to current Google Play delivery.'
-          (out/'summary.json').write_text(json.dumps(summary,indent=2,default=str))
-          PY
+          python programs/minly-vdp/final_audit_runner.py \
+            --phase ios-public \
+            --output artifacts/minly-final
 
-      - name: Run iOS public metadata and associated-domain fallback
+      - name: Correlate mobile candidates
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts/minly-fallback/ios
-          python programs/minly-vdp/public_mobile_fallback.py ios \
-            --output artifacts/minly-fallback/ios/summary.json
+          python programs/minly-vdp/final_audit_runner.py \
+            --phase rank \
+            --output artifacts/minly-final
 
-      - name: Candidate and provenance integrity gate
+      - name: Complete tool and provenance integrity gate
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
           from pathlib import Path
-          a=json.loads(Path('artifacts/minly-fallback/android/summary.json').read_text())
-          i=json.loads(Path('artifacts/minly-fallback/ios/summary.json').read_text())
+          a=json.loads(Path('artifacts/minly-final/android/summary.json').read_text())
+          i=json.loads(Path('artifacts/minly-final/ios/summary.json').read_text())
+          r=json.loads(Path('artifacts/minly-final/candidate-review/candidate-priority.json').read_text())
           assert a['observed_package'] == 'com.minly.users'
           assert a['status'] == 'RAN_PUBLIC_MIRROR_STATIC'
-          assert a['artifact_provenance']['base_apk']['known_cert_sha1_match'] is True
           assert a['verification_status'] == 'UNVERIFIED_STATIC_CANDIDATES_ONLY'
+          p=a['artifact_provenance']
+          assert p['base_apk']['known_cert_sha1_match'] is True
+          dal=p['google_digital_asset_links']
+          if dal.get('published_sha256_fingerprints'):
+              assert dal['observed_cert_matches_published_sha256'] is True
+          tc=a.get('toolchain') or {}
+          required=['aapt_badging','apksigner','apktool','jadx','mobsfscan','semgrep','detect_secrets','gitleaks','trivy']
+          skipped={name:(tc.get(name) or {}).get('status') for name in required if name not in tc or (tc.get(name) or {}).get('status') == 'SKIPPED'}
+          assert not skipped, skipped
+          assert Path('artifacts/minly-final/android/artifact-inspection.json').is_file()
           assert i['app_store_id'] == '1528802350'
-          assert i['binary_static_coverage'] is False
           assert i['status'] == 'RAN_PUBLIC_METADATA_ONLY'
+          assert i['binary_static_coverage'] is False
           assert i['verification_status'] == 'UNVERIFIED_METADATA_CANDIDATES_ONLY'
-          print('artifactless mobile fallback integrity: PASS')
-          print('android candidate markers:', len(a.get('candidate_markers', [])))
-          print('ios candidate markers:', len(i.get('candidate_markers', [])))
+          assert r['policy']['automated_output_is_not_a_finding'] is True
+          assert r['submission_ready_count'] == 0
+          print('complete artifactless mobile toolchain: PASS')
+          print('android candidate counts:', a.get('candidate_counts'))
+          print('android generic markers:', len(a.get('candidate_markers', [])))
+          print('ios metadata candidates:', len(i.get('candidate_markers', [])))
+          print('correlated candidate count:', r['candidate_count'])
+          print('DAL certificate match:', dal.get('observed_cert_matches_published_sha256'))
           PY
 
       - name: Remove downloaded and decoded proprietary material
@@ -108,13 +124,13 @@ jobs:
         shell: bash
         run: |
           rm -rf "${RUNNER_TEMP}/minly-public-android"
-          rm -rf artifacts/minly-fallback/android/decoded artifacts/minly-fallback/android/jadx
-          rm -f artifacts/minly-fallback/android/mobsfscan.json artifacts/minly-fallback/android/semgrep.json artifacts/minly-fallback/android/detect-secrets.json
+          rm -rf artifacts/minly-final/android/decoded artifacts/minly-final/android/jadx
+          rm -f artifacts/minly-final/android/binary-strings.txt
 
-      - name: Upload sanitized mobile fallback evidence
+      - name: Upload sanitized mobile evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: minly-artifactless-mobile-${{ github.run_id }}
-          path: artifacts/minly-fallback/
+          path: artifacts/minly-final/
           if-no-files-found: error
           retention-days: 30
