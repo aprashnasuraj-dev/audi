@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from enum import StrEnum
 from urllib.parse import urlsplit, urlunsplit
+
+from .models import Identity
 
 
 def _normalize_host(host: str) -> str:
@@ -22,6 +25,15 @@ def _normalize_host(host: str) -> str:
         if value.startswith("*."):
             raise ValueError("wildcard IP literals are not permitted")
     return f"*.{suffix}" if value.startswith("*.") else suffix
+
+
+def _matches(pattern: str, host: str) -> bool:
+    pattern = _normalize_host(pattern)
+    candidate = _normalize_host(host)
+    if pattern.startswith("*."):
+        suffix = pattern[2:]
+        return candidate.endswith("." + suffix) and candidate != suffix
+    return candidate == pattern
 
 
 def canonicalize_url(url: str) -> str:
@@ -54,15 +66,7 @@ class ScopeGuard:
         object.__setattr__(self, "allow_hosts", normalized)
 
     def allows_host(self, host: str) -> bool:
-        candidate = _normalize_host(host)
-        for pattern in self.allow_hosts:
-            if pattern.startswith("*."):
-                suffix = pattern[2:]
-                if candidate.endswith("." + suffix) and candidate != suffix:
-                    return True
-            elif candidate == pattern:
-                return True
-        return False
+        return any(_matches(pattern, host) for pattern in self.allow_hosts)
 
     def assert_url(self, url: str) -> str:
         canonical = canonicalize_url(url)
@@ -70,3 +74,140 @@ class ScopeGuard:
         if not self.allows_host(host):
             raise PermissionError(f"out-of-scope host: {host}")
         return canonical
+
+
+class ScopeState(StrEnum):
+    SEED_ALLOWED = "SEED_ALLOWED"
+    FLOW_ALLOWED = "FLOW_ALLOWED"
+    DENIED = "DENIED"
+    THIRD_PARTY = "THIRD_PARTY"
+    UNRESOLVED = "UNRESOLVED"
+
+
+@dataclass(frozen=True)
+class ScopeGrant:
+    host: str
+    source_url: str
+    destination_url: str
+    identity: str
+    identity_role: str
+    event: str
+
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+
+class ScopePolicy:
+    """Exact seed scope plus authenticated, provenance-carrying flow grants.
+
+    Static wildcard authorization is deliberately not inferred from an
+    authenticated-flow suffix. A new host is granted only after a top-level
+    navigation from an already-authorized page under a non-anonymous identity.
+    Explicit deny rules always win.
+    """
+
+    def __init__(
+        self,
+        allow_hosts: list[str] | tuple[str, ...],
+        *,
+        deny_hosts: list[str] | tuple[str, ...] = (),
+        authenticated_flow_suffixes: list[str] | tuple[str, ...] = (),
+        authenticated_flow_hosts: list[str] | tuple[str, ...] = (),
+    ):
+        self.seed_guard = ScopeGuard(allow_hosts)
+        self.deny_hosts = tuple(_normalize_host(value) for value in deny_hosts)
+        self.flow_suffixes = tuple(_normalize_host(value) for value in authenticated_flow_suffixes)
+        self.flow_hosts = tuple(_normalize_host(value) for value in authenticated_flow_hosts)
+        self._grants: dict[str, ScopeGrant] = {}
+
+    @classmethod
+    def from_target(cls, target: dict) -> "ScopePolicy":
+        return cls(
+            tuple(str(value) for value in target.get("allow_hosts") or ()),
+            deny_hosts=tuple(str(value) for value in target.get("deny_hosts") or ()),
+            authenticated_flow_suffixes=tuple(
+                str(value) for value in target.get("authenticated_flow_suffixes") or ()
+            ),
+            authenticated_flow_hosts=tuple(
+                str(value) for value in target.get("authenticated_flow_hosts") or ()
+            ),
+        )
+
+    @property
+    def grants(self) -> list[ScopeGrant]:
+        return [self._grants[key] for key in sorted(self._grants)]
+
+    def is_denied_host(self, host: str) -> bool:
+        return any(_matches(pattern, host) for pattern in self.deny_hosts)
+
+    def is_flow_candidate(self, host: str) -> bool:
+        candidate = _normalize_host(host)
+        if any(candidate == item for item in self.flow_hosts):
+            return True
+        return any(candidate == suffix or candidate.endswith("." + suffix) for suffix in self.flow_suffixes)
+
+    def state_for_host(self, host: str) -> ScopeState:
+        candidate = _normalize_host(host)
+        if self.is_denied_host(candidate):
+            return ScopeState.DENIED
+        if self.seed_guard.allows_host(candidate):
+            return ScopeState.SEED_ALLOWED
+        if candidate in self._grants:
+            return ScopeState.FLOW_ALLOWED
+        if self.is_flow_candidate(candidate):
+            return ScopeState.UNRESOLVED
+        return ScopeState.THIRD_PARTY
+
+    def allows_host(self, host: str) -> bool:
+        return self.state_for_host(host) in {ScopeState.SEED_ALLOWED, ScopeState.FLOW_ALLOWED}
+
+    def assert_url(self, url: str) -> str:
+        canonical = canonicalize_url(url)
+        host = urlsplit(canonical).hostname or ""
+        state = self.state_for_host(host)
+        if state not in {ScopeState.SEED_ALLOWED, ScopeState.FLOW_ALLOWED}:
+            raise PermissionError(f"scope state {state.value} for host: {host}")
+        return canonical
+
+    def try_navigation_transition(
+        self,
+        destination_url: str,
+        *,
+        source_url: str,
+        identity: Identity,
+        top_level_navigation: bool,
+        authentication_verified: bool,
+        event: str = "browser-navigation",
+    ) -> tuple[str, ScopeState]:
+        destination = canonicalize_url(destination_url)
+        host = urlsplit(destination).hostname or ""
+        current = self.state_for_host(host)
+        if current in {ScopeState.SEED_ALLOWED, ScopeState.FLOW_ALLOWED}:
+            return destination, current
+        if current is ScopeState.DENIED:
+            raise PermissionError(f"explicitly denied host: {host}")
+        if not top_level_navigation:
+            raise PermissionError(f"non-navigation request cannot extend scope to {host}")
+        if identity.role == "anonymous" or not authentication_verified:
+            raise PermissionError(f"authenticated navigation proof required before extending scope to {host}")
+        if not self.is_flow_candidate(host):
+            raise PermissionError(f"destination host is not an eligible authenticated-flow host: {host}")
+
+        source = canonicalize_url(source_url)
+        source_host = urlsplit(source).hostname or ""
+        if not self.allows_host(source_host):
+            raise PermissionError(f"navigation source is not already authorized: {source_host}")
+
+        grant = ScopeGrant(
+            host=_normalize_host(host),
+            source_url=source,
+            destination_url=destination,
+            identity=identity.name,
+            identity_role=identity.role,
+            event=event,
+        )
+        self._grants[grant.host] = grant
+        return destination, ScopeState.FLOW_ALLOWED
+
+    def provenance(self) -> list[dict[str, str]]:
+        return [grant.to_dict() for grant in self.grants]
