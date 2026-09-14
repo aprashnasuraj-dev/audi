@@ -28,11 +28,12 @@ def _resolve(value: Any) -> Any:
 
 
 class IdentityVault:
-    """Loads named identities and resolves secrets only when that identity is used.
+    """Loads named identities and resolves secrets only when selected.
 
-    Lazy resolution matters for multi-target runs: a mock target can use mock
-    credentials while a real target uses separate production/staging secrets,
-    without requiring every environment variable for every target up front.
+    Browser identities may use Playwright storage-state files in addition to
+    headers/cookies. Authentication checks are carried with the identity so an
+    authenticated run can prove that the session is actually logged in before
+    navigation-derived scope can expand.
     """
 
     def __init__(
@@ -40,9 +41,11 @@ class IdentityVault:
         identities: dict[str, Identity] | None = None,
         *,
         raw_configs: dict[str, dict[str, Any]] | None = None,
+        base_dir: Path | None = None,
     ):
         self._identities = dict(identities or {})
         self._raw_configs = {str(k): dict(v or {}) for k, v in (raw_configs or {}).items()}
+        self._base_dir = (base_dir or Path.cwd()).resolve()
         if "anonymous" not in self._identities and "anonymous" not in self._raw_configs:
             self._identities = {"anonymous": Identity("anonymous", role="anonymous"), **self._identities}
 
@@ -54,7 +57,10 @@ class IdentityVault:
         configs = raw.get("identities") or {}
         if not isinstance(configs, dict):
             raise ValueError("identity vault 'identities' must be a mapping")
-        return cls(raw_configs={str(name): dict(cfg or {}) for name, cfg in configs.items()})
+        return cls(
+            raw_configs={str(name): dict(cfg or {}) for name, cfg in configs.items()},
+            base_dir=path.parent,
+        )
 
     def names(self) -> list[str]:
         ordered = list(self._identities)
@@ -73,11 +79,31 @@ class IdentityVault:
         bearer = resolved.get("bearer_token")
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"
+
+        storage_state = resolved.get("storage_state_path")
+        storage_state_path: str | None = None
+        if storage_state:
+            candidate = Path(str(storage_state)).expanduser()
+            if not candidate.is_absolute():
+                candidate = self._base_dir / candidate
+            candidate = candidate.resolve()
+            if not candidate.is_file():
+                raise RuntimeError(f"storage state for identity {name!r} does not exist: {candidate}")
+            storage_state_path = str(candidate)
+
         identity = Identity(
             name,
             role=str(resolved.get("role") or ""),
             headers=headers,
             cookies=cookies,
+            storage_state_path=storage_state_path,
+            auth_check_url=(str(resolved["auth_check_url"]) if resolved.get("auth_check_url") else None),
+            auth_check_contains=(
+                str(resolved["auth_check_contains"]) if resolved.get("auth_check_contains") else None
+            ),
+            auth_check_selector=(
+                str(resolved["auth_check_selector"]) if resolved.get("auth_check_selector") else None
+            ),
         )
         self._identities[name] = identity
         return identity
