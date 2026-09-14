@@ -1,0 +1,37 @@
+schema_version: 1
+targets:
+  - name: minly-web
+    url: https://minly.com/
+    live_target: true
+    scope_snapshot: "2026-09-14"
+    scope_max_age_days: 30
+    allow_hosts:
+      - minly.com
+    deny_hosts:
+      - "*.minly.com"
+    identities:
+      - anonymous
+      - minly-user
+    authentication_mode: optional
+    technologies:
+      - web
+    required_families:
+      - browser-discovery
+      - web-hardening
+    minimum_coverage_ratio: 1.0
+    scope_note: "Minly VDP lists exactly minly.com. No subdomain enumeration or sibling-host expansion is authorized by this target configuration. Authenticated testing uses only a researcher-controlled account when a verified storage-state secret is supplied."
+    limits:
+      max_pages: 20
+      request_budget: 90
+      timeout_seconds: 10
+      max_requests_per_second: 1
+      max_retry_after_seconds: 30
+      stop_on_429: true
+    browser:
+      settle_ms: 1200
+      allow_third_party_resources: false
+    openapi: null
+    graphql_schema: null
+    container_image: null
+    iac_globs: []
+    source_root: null
