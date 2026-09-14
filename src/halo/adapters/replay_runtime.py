@@ -37,7 +37,7 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
             coverage.reason = "runtime replay requires at least two identities"
             return [], coverage
 
-        ctx = context or {}
+        ctx = context if context is not None else {}
         discovered = ctx.get("discovered") or {}
         request_index: dict[tuple[str, str], dict[str, str]] = {}
         for payload in discovered.values():
@@ -53,16 +53,33 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
 
         guard = ScopeGuard(tuple(target["allow_hosts"]))
         replay = ReplayTransport(guard, timeout=float(target.get("limits", {}).get("timeout_seconds", 10)))
+        configured_budget = int(target.get("limits", {}).get("request_budget", 250))
+        remaining = int(ctx.setdefault("request_budget_remaining", configured_budget))
         findings: list[Finding] = []
         seen_authz: set[tuple[str, str]] = set()
+        comparisons_completed = 0
         try:
             for identity_a, identity_b in combinations(selected, 2):
                 for (method, url), item in sorted(request_index.items()):
+                    # ReplayTransport.compare performs exactly two target requests.
+                    if remaining < 2:
+                        coverage.status = FamilyStatus.FAILED
+                        coverage.reason = "request budget exhausted before runtime replay completed"
+                        coverage.findings = len(findings)
+                        coverage.metadata.update({
+                            "replayable_requests": len(request_index),
+                            "comparisons_completed": comparisons_completed,
+                            "request_budget_remaining": remaining,
+                        })
+                        ctx["request_budget_remaining"] = remaining
+                        return findings, coverage
                     diff = await replay.compare(
                         CapturedRequest(method=method, url=url, headers={}),
                         identity_a,
                         identity_b,
                     )
+                    remaining -= 2
+                    comparisons_completed += 1
 
                     if "/admin" in (urlsplit(url).path or "").lower():
                         for name, fp in ((identity_a.name, diff.a), (identity_b.name, diff.b)):
@@ -120,11 +137,18 @@ class ReplayRuntimeAdapter(VaultBoundAdapter):
                     ))
             coverage.tools_executed = 1
             coverage.findings = len(findings)
-            coverage.metadata["replayable_requests"] = len(request_index)
+            coverage.metadata.update({
+                "replayable_requests": len(request_index),
+                "comparisons_completed": comparisons_completed,
+                "request_budget_remaining": remaining,
+            })
+            ctx["request_budget_remaining"] = remaining
         except TimeoutError as exc:
             coverage.status = FamilyStatus.TIMEOUT
             coverage.reason = str(exc)
+            ctx["request_budget_remaining"] = remaining
         except Exception as exc:
             coverage.status = FamilyStatus.FAILED
             coverage.reason = f"{type(exc).__name__}: {exc}"
+            ctx["request_budget_remaining"] = remaining
         return findings, coverage
