@@ -1,7 +1,10 @@
 schema_version: 1
 identities:
-  anonymous: {}
+  anonymous:
+    role: anonymous
   user:
+    role: user
     bearer_token: ${HALO_USER_TOKEN}
   admin:
+    role: admin
     bearer_token: ${HALO_ADMIN_TOKEN}
