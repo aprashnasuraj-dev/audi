@@ -22,6 +22,8 @@ storage-state*.json
 *.storage-state.json
 **/storage-state*.json
 playwright/.auth/
+*.har
+programs/minly-vdp/private/
 
 # Local editor/OS noise
 .DS_Store
