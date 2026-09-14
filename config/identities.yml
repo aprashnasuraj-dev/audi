@@ -1,7 +1,20 @@
 schema_version: 1
 identities:
-  anonymous: {}
+  anonymous:
+    role: anonymous
+
+  # Real target identities resolve only if a selected target references them.
   user:
+    role: user
     bearer_token: ${HALO_USER_TOKEN}
   admin:
+    role: admin
     bearer_token: ${HALO_ADMIN_TOKEN}
+
+  # Isolated credentials for the built-in seeded target.
+  mock-user:
+    role: user
+    bearer_token: ${HALO_MOCK_USER_TOKEN}
+  mock-admin:
+    role: admin
+    bearer_token: ${HALO_MOCK_ADMIN_TOKEN}
