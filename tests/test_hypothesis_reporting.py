@@ -7,10 +7,10 @@ import pytest
 
 from halo.hypothesis import ReproductionVerifier, compose_chains, enrich_threat_model
 from halo.identity import IdentityVault
+from halo.mock_target import mock_server
 from halo.models import CoverageRecord, FamilyStatus, Finding, Identity
 from halo.orchestrator import TargetRun
 from halo.reporting.bundle import write_bundle
-from tests.mock_target import mock_server
 
 
 def _finding(**overrides) -> Finding:
