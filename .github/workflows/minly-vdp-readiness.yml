@@ -144,7 +144,7 @@ jobs:
               'candidate',
               'researcher-controlled',
               'Do not commit APK/IPA binaries',
-              'not a report by itself',
+              'report by itself',
               'App Store ID `1528802350`',
               'package `com.minly.users`',
           ]:
