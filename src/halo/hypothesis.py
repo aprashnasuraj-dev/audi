@@ -66,13 +66,7 @@ def compose_chains(findings: list[Finding]) -> list[dict[str, Any]]:
 
 
 class ReproductionVerifier:
-    """Re-test each supported candidate before final-report admission.
-
-    Network candidates are replayed. Contract candidates are re-read from the
-    declared contract and, when safe, the observed GET/HEAD is replayed. Trivy
-    candidates trigger one cached repeat scan per family and are admitted only
-    when the same rule/target is produced again.
-    """
+    """Re-test each supported candidate before final-report admission."""
 
     def __init__(
         self,
@@ -86,13 +80,27 @@ class ReproductionVerifier:
         self.target = target
         self.vault = vault
         self.repo_root = (repo_root or Path(".")).resolve()
-        self.context = context or {}
+        self.context = context if context is not None else {}
         self.target_name = target_name
         self.replay = ReplayTransport(
             ScopeGuard(tuple(target["allow_hosts"])),
             timeout=float(target.get("limits", {}).get("timeout_seconds", 10)),
         )
         self._tool_reproduction_cache: dict[str, set[tuple[str, str]]] = {}
+        self.errors: list[str] = []
+        self.budget_exhausted = False
+        self.reproduced = 0
+        self.rejected = 0
+
+    def _consume_target_requests(self, count: int) -> None:
+        configured = int(self.target.get("limits", {}).get("request_budget", 250))
+        remaining = int(self.context.setdefault("request_budget_remaining", configured))
+        if remaining < count:
+            self.budget_exhausted = True
+            raise RuntimeError(
+                f"request budget exhausted during reproduction: need {count}, have {remaining}"
+            )
+        self.context["request_budget_remaining"] = remaining - count
 
     async def _replay_status(self, finding: Finding) -> int | None:
         method = str(finding.evidence.get("method", "GET")).upper()
@@ -100,6 +108,7 @@ class ReproductionVerifier:
             return None
         request = CapturedRequest(method=method, url=finding.url, headers={})
         identity = self.vault.get(finding.identity)
+        self._consume_target_requests(2)
         diff = await self.replay.compare(request, identity, identity)
         return diff.a.status_code
 
@@ -142,6 +151,10 @@ class ReproductionVerifier:
         reproduced = set()
         if coverage is not None and coverage.status is FamilyStatus.RAN:
             reproduced = {(item.rule_id, item.url) for item in findings}
+        elif coverage is not None:
+            raise RuntimeError(
+                f"{family} reproduction scan did not complete: {coverage.status.value} {coverage.reason}"
+            )
         self._tool_reproduction_cache[family] = reproduced
         return reproduced
 
@@ -151,12 +164,14 @@ class ReproductionVerifier:
 
         if finding.rule_id == "halo.nonadmin-admin-surface-access":
             identity = self.vault.get(str(finding.identity))
+            self._consume_target_requests(2)
             diff = await self.replay.compare(request, identity, self.vault.get("anonymous"))
             return 200 <= diff.a.status_code < 300
 
         if finding.rule_id == "halo.identity-response-differential":
             if not finding.identity or not finding.compared_identity:
                 return False
+            self._consume_target_requests(2)
             diff = await self.replay.compare(
                 request,
                 self.vault.get(finding.identity),
@@ -174,18 +189,24 @@ class ReproductionVerifier:
             reproduced = await self._repeat_tool_family(finding.family)
             return (finding.rule_id, finding.url) in reproduced
 
-        # A new finding type is not reportable until it gets a reproduction path.
-        return False
+        raise NotImplementedError(
+            f"no reproduction verifier registered for {finding.family}/{finding.rule_id}"
+        )
 
     async def verified_only(self, findings: list[Finding]) -> list[Finding]:
         verified: list[Finding] = []
         for finding in findings:
             try:
                 confirmed = await self.verify(finding)
-            except Exception:
-                confirmed = False
-            if not confirmed:
+            except Exception as exc:
+                self.errors.append(
+                    f"{finding.rule_id} @ {finding.url}: {type(exc).__name__}: {exc}"
+                )
                 continue
+            if not confirmed:
+                self.rejected += 1
+                continue
+            self.reproduced += 1
             evidence = dict(finding.evidence)
             evidence["reproduction"] = {"confirmed": True}
             verified.append(replace(finding, evidence=evidence))
