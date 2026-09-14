@@ -11,7 +11,7 @@ from .adapters.replay_runtime import ReplayRuntimeAdapter
 from .adapters.trivy_exec import TrivyContainerAdapter, TrivyIaCAdapter
 from .adapters.web_hardening import WebHardeningAdapter
 from .applicability import TechnologyProfile, family_applicability, resolve_technologies
-from .canonical import CanonicalIssue, canonicalize_findings
+from .canonical import CanonicalIssue, canonicalize_findings, classify_known_issues
 from .hypothesis import ReproductionVerifier, compose_chains, enrich_threat_model
 from .identity import IdentityVault
 from .input_gate import evaluate_family_input
@@ -65,7 +65,7 @@ async def _run_optional_family(
     if family == "container":
         return await TrivyContainerAdapter().run(target_name, str(gate_value))
     if family == "iac":
-        return await TrivyIaCAdapter().run(target_name, [str(path) for path in gate_value])
+        return await TrivyIaCAdapter().run(target_name, [str(path) for path in gate.value])
     raise ValueError(f"unknown optional family {family!r}")
 
 
@@ -195,6 +195,7 @@ async def run_target(
         ))
 
     run.canonical_issues = canonicalize_findings(run.findings, target_name)
+    classify_known_issues(run.canonical_issues, target)
     run.publication = evaluate_publication(
         target,
         run.coverage,
