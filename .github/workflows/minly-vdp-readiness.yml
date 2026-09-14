@@ -107,6 +107,7 @@ jobs:
           root = Path('programs/minly-vdp')
           template = (root / 'SUBMISSION_TEMPLATE.md').read_text(encoding='utf-8')
           rules = (root / 'FINAL_REPORT_FORMAT.md').read_text(encoding='utf-8')
+          lines = template.splitlines()
 
           required_headings = [
               '# Submission title',
@@ -125,8 +126,10 @@ jobs:
           ]
           positions = []
           for heading in required_headings:
-              pos = template.find(heading)
-              assert pos >= 0, f'missing canonical report heading: {heading}'
+              try:
+                  pos = lines.index(heading)
+              except ValueError:
+                  raise AssertionError(f'missing canonical report heading: {heading}')
               positions.append(pos)
           assert positions == sorted(positions), 'canonical report headings are out of order'
 
