@@ -34,7 +34,42 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -U pip
-      - run: python -m pip install -e '.[test,browser]'
+      - run: python -m pip install -e '.[all]'
       - run: python -m playwright install --with-deps chromium
-      - name: Phase 2 acceptance gate
+      - name: Phase 2 component acceptance gate
         run: python -m pytest tests/test_mock_pipeline.py
+
+      - name: Start seeded target for integrated run
+        run: |
+          echo 'HALO_USER_TOKEN=user-token' >> "$GITHUB_ENV"
+          echo 'HALO_ADMIN_TOKEN=admin-token' >> "$GITHUB_ENV"
+          nohup python scripts/serve-mock.py > /tmp/halo-mock.log 2>&1 &
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8765/ >/dev/null && exit 0
+            sleep 0.5
+          done
+          cat /tmp/halo-mock.log
+          exit 1
+
+      - name: Integrated Phase 2-4 acceptance gate
+        run: |
+          python scripts/run-audit.py \
+            --target mock-local \
+            --hypothesis \
+            --phase2-gate \
+            --output artifacts/ci
+          test -s artifacts/ci/report.json
+          test -s artifacts/ci/report.md
+          test -s artifacts/ci/report.html
+          test -s artifacts/ci/report.pdf
+          test -s artifacts/ci/findings.sarif
+          test -s artifacts/ci/sbom.cdx.json
+          test -s artifacts/ci/vex.openvex.json
+
+      - name: Upload integrated audit proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: halo-ci-proof-${{ github.run_id }}
+          path: artifacts/ci/
+          if-no-files-found: error
+          retention-days: 30
