@@ -14,7 +14,9 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = ["playwright>=1.49,<2"]
+report = ["reportlab>=4,<5"]
 test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<1"]
+all = ["playwright>=1.49,<2", "reportlab>=4,<5", "pytest>=8,<9", "pytest-asyncio>=0.24,<1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
