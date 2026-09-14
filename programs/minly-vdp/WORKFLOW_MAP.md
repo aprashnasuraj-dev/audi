@@ -4,7 +4,7 @@ Status: Phase 1 baseline map for authorization-first testing.
 
 This document separates **publicly observed workflows** from **authenticated workflows that must be confirmed manually after Account A and Account B exist**. Do not infer hidden endpoints or test third-party services.
 
-## 1. Public / anonymous surface
+## 1. Public / anonymous website surface
 
 Observed from Minly's public website and indexed pages:
 
@@ -66,11 +66,36 @@ The public site exposes a support/help area and support contact channel.
 
 Authorization relevance: if authenticated support tickets exist, verify only whether Account A can access Account A tickets and Account B can access Account B tickets. Do not interact with tickets belonging to any other user.
 
-## 2. Account lifecycle — verify after creation
+## 2. Official mobile-app workflows confirmed from store listings
+
+Both official app listings describe these ordinary-user capabilities:
+
+- browse/connect with actors, singers, athletes, influencers, and other celebrities;
+- request a personalized celebrity video message;
+- privately chat with celebrities using text and voice messages;
+- attend Minly Live interactive online concerts;
+- use in-app purchases for Minly experiences.
+
+The iOS listing identifies Minly as an iPhone app and explicitly labels messaging/chat, user-generated content, and in-app purchases. The Android listing shows the same personalized-video, private text/voice chat, and Minly Live flows.
+
+Authorization implications to verify after Account A and Account B exist:
+
+- private chat/thread ownership;
+- personalized-video request ownership;
+- request status/history isolation;
+- event entitlement/access isolation;
+- in-app purchase/order history isolation;
+- any account-bound downloadable or streamable media;
+- notification ownership;
+- account deletion/data-management controls.
+
+Do not test Apple, Google Play, payment processors, analytics providers, messaging providers, or other third parties directly.
+
+## 3. Account lifecycle — verify after creation
 
 Minly's privacy policy states that account registration may collect account/profile information and that logged-in users can request account deletion through account settings.
 
-Confirm manually for Account A and Account B:
+Confirm manually for Account A and Account B on the website first, then compare Android/iOS where available:
 
 - registration;
 - verification step(s);
@@ -84,16 +109,16 @@ Confirm manually for Account A and Account B:
 
 Record only the visible workflow and the minimum request/response metadata needed for authorization checks.
 
-## 3. Authenticated engagement — verify after creation
+## 4. Authenticated engagement — verify after creation
 
-The platform terms describe user Content Requests to celebrities. The public site also advertises personalized videos, private messaging/DM-type interactions, event access, and merchandise/business surfaces.
+The platform terms describe user Content Requests to celebrities. Public website/app materials also advertise personalized videos, private text/voice messaging, online events, and purchase flows.
 
 After login, map which of the following are actually present for ordinary users:
 
 - favorites/saved celebrities;
 - personalized video request drafts or submitted requests;
 - request status/history;
-- messages or advice requests;
+- private text/voice message threads;
 - order/payment history;
 - wallet/credit balance;
 - event tickets/entitlements;
@@ -105,7 +130,7 @@ After login, map which of the following are actually present for ordinary users:
 
 Do not test an item that does not exist in the current product.
 
-## 4. Payment boundary
+## 5. Payment boundary
 
 Minly's terms describe payment authorization and refund behavior. Authorization testing must not create financial harm or charge another person.
 
@@ -119,13 +144,13 @@ Rules:
 - prefer non-financial objects first;
 - if a legitimate purchase is ever needed, use the researcher's own payment method and one minimal transaction.
 
-## 5. Third-party boundary
+## 6. Third-party boundary
 
 A page, script, payment provider, analytics service, CDN, social platform, app store, or messaging service is not automatically in scope merely because Minly uses it.
 
 If normal navigation leaves the exact Minly-owned in-scope asset, record the transition and stop testing that external service.
 
-## 6. Authorization object inventory
+## 7. Authorization object inventory
 
 Fill this table only with object classes observed through normal use. Do not commit live identifiers from real testing to the public repository.
 
@@ -134,17 +159,17 @@ Fill this table only with object classes observed through normal use. Do not com
 | User profile | To verify | Yes | Read/update | Ordinary account only |
 | Account settings | To verify | Yes | Read/update | No destructive change until needed |
 | Favorites/saved items | To verify | Likely | Read/update/delete | Test only if feature exists |
-| Content/video request | To verify | Yes | Read/update/cancel/status | Benign test data only |
+| Content/video request | Confirmed product feature | Yes | Read/update/cancel/status | Benign test data only |
 | Order/receipt | To verify | Yes | Read | Avoid unnecessary purchase |
 | Wallet/credits | To verify | Yes | Read | No value manipulation |
-| Event entitlement | To verify | Yes | Read/use | Only legitimate own entitlement |
+| Event entitlement | Confirmed product feature | Yes | Read/use | Only legitimate own entitlement |
 | Purchased media | To verify | Yes | Read/download/stream | Own media only |
-| Message/advice thread | To verify | Yes | Read/send | Avoid unnecessary celebrity interaction |
+| Private text/voice thread | Confirmed app feature | Yes | Read/send | Avoid unnecessary celebrity interaction |
 | Notification | To verify | Yes | Read | Own notifications only |
 | Support ticket | To verify | Yes | Read/update | Own tickets only |
-| Account deletion request | To verify | Yes | Initiate/cancel if supported | Use disposable research account only |
+| Account deletion request | Confirmed policy capability | Yes | Initiate/cancel if supported | Use disposable research account only |
 
-## 7. First-pass priority
+## 8. First-pass priority
 
 Prioritize authorization checks that are reversible and do not require payment or third-party interaction:
 
@@ -152,7 +177,8 @@ Prioritize authorization checks that are reversible and do not require payment o
 2. favorites/saved objects;
 3. benign draft/request objects, if drafts exist;
 4. notification/history objects;
-5. support objects created by the researcher;
-6. paid or entitlement objects only after lower-risk coverage is complete.
+5. private messaging metadata only when a benign thread exists naturally;
+6. support objects created by the researcher;
+7. paid or entitlement objects only after lower-risk coverage is complete.
 
 The objective is not to maximize request count. It is to establish whether owner identity is enforced consistently across the normal product workflows.
