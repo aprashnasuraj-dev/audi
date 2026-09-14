@@ -12,9 +12,10 @@ from .adapters.graphql_schema import _schema_roots
 from .adapters.trivy_exec import TrivyContainerAdapter, TrivyIaCAdapter
 from .identity import IdentityVault
 from .input_gate import evaluate_family_input
+from .live_safety import live_safety
 from .models import FamilyStatus, Finding
 from .replay import CapturedRequest, ReplayTransport
-from .scope import ScopeGuard
+from .scope import ScopePolicy
 
 
 def enrich_threat_model(findings: list[Finding]) -> list[Finding]:
@@ -84,10 +85,18 @@ class ReproductionVerifier:
         self.repo_root = (repo_root or Path(".")).resolve()
         self.context = context if context is not None else {}
         self.target_name = target_name
-        self.guard = ScopeGuard(tuple(target["allow_hosts"]))
+        policy = self.context.get("_scope_policy")
+        if policy is None:
+            policy = ScopePolicy.from_target(target)
+            self.context["_scope_policy"] = policy
+        if not isinstance(policy, ScopePolicy):
+            raise TypeError("context contains invalid scope policy")
+        self.policy = policy
+        self.safety = live_safety(self.context, target)
         self.replay = ReplayTransport(
-            self.guard,
+            self.policy,
             timeout=float(target.get("limits", {}).get("timeout_seconds", 10)),
+            safety=self.safety,
         )
         self._tool_reproduction_cache: dict[str, set[tuple[str, str]]] = {}
         self.errors: list[str] = []
@@ -103,6 +112,21 @@ class ReproductionVerifier:
             raise RuntimeError(f"request budget exhausted during reproduction: need {count}, have {remaining}")
         self.context["request_budget_remaining"] = remaining - count
 
+    async def _request(self, finding: Finding) -> httpx.Response:
+        identity = self.vault.get(str(finding.identity or "anonymous"))
+        url = self.policy.assert_url(finding.url)
+        self._consume_target_requests(1)
+        await self.safety.before_request(url)
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=float(self.target.get("limits", {}).get("timeout_seconds", 10)),
+            headers=identity.headers,
+            cookies=identity.cookies,
+        ) as client:
+            response = await client.get(url)
+        self.safety.observe_response(url, response.status_code, response.headers)
+        return response
+
     async def _replay_status(self, finding: Finding) -> int | None:
         method = str(finding.evidence.get("method", "GET")).upper()
         if method not in {"GET", "HEAD"} or not finding.identity:
@@ -114,17 +138,32 @@ class ReproductionVerifier:
         return diff.a.status_code
 
     async def _verify_header_absence(self, finding: Finding, header: str) -> bool:
-        identity = self.vault.get(str(finding.identity or "anonymous"))
-        url = self.guard.assert_url(finding.url)
-        self._consume_target_requests(1)
-        async with httpx.AsyncClient(
-            follow_redirects=False,
-            timeout=float(self.target.get("limits", {}).get("timeout_seconds", 10)),
-            headers=identity.headers,
-            cookies=identity.cookies,
-        ) as client:
-            response = await client.get(url)
+        response = await self._request(finding)
         return response.status_code < 500 and header.lower() not in {key.lower() for key in response.headers}
+
+    async def _verify_frame_protection_absence(self, finding: Finding) -> bool:
+        response = await self._request(finding)
+        csp = response.headers.get("content-security-policy", "").lower()
+        xfo = response.headers.get("x-frame-options", "").strip()
+        return response.status_code < 500 and "frame-ancestors" not in csp and not xfo
+
+    async def _verify_cookie_attribute_absence(self, finding: Finding, attribute: str) -> bool:
+        response = await self._request(finding)
+        cookie_name = str(finding.evidence.get("cookie_name") or "")
+        if not cookie_name:
+            return False
+        cookies = [value for value in response.headers.get_list("set-cookie") if value.split("=", 1)[0].strip() == cookie_name]
+        if not cookies:
+            return False
+        needle = attribute.lower()
+        return any(needle not in cookie.lower() for cookie in cookies)
+
+    async def _verify_cors_wildcard_credentials(self, finding: Finding) -> bool:
+        response = await self._request(finding)
+        return (
+            response.headers.get("access-control-allow-origin", "").strip() == "*"
+            and response.headers.get("access-control-allow-credentials", "").strip().lower() == "true"
+        )
 
     async def _verify_openapi(self, finding: Finding) -> bool:
         spec_path = (self.repo_root / str(self.target.get("openapi", ""))).resolve()
@@ -180,13 +219,29 @@ class ReproductionVerifier:
             if not finding.identity or not finding.compared_identity:
                 return False
             self._consume_target_requests(2)
-            diff = await self.replay.compare(request, self.vault.get(finding.identity), self.vault.get(finding.compared_identity))
-            return diff.different
+            diff = await self.replay.compare(
+                request,
+                self.vault.get(finding.identity),
+                self.vault.get(finding.compared_identity),
+            )
+            return diff.material
 
         if finding.rule_id == "halo.missing-hsts":
             return await self._verify_header_absence(finding, "Strict-Transport-Security")
         if finding.rule_id == "halo.missing-csp":
             return await self._verify_header_absence(finding, "Content-Security-Policy")
+        if finding.rule_id == "halo.missing-nosniff":
+            return await self._verify_header_absence(finding, "X-Content-Type-Options")
+        if finding.rule_id == "halo.missing-frame-protection":
+            return await self._verify_frame_protection_absence(finding)
+        if finding.rule_id == "halo.session-cookie-missing-secure":
+            return await self._verify_cookie_attribute_absence(finding, "secure")
+        if finding.rule_id == "halo.session-cookie-missing-httponly":
+            return await self._verify_cookie_attribute_absence(finding, "httponly")
+        if finding.rule_id == "halo.session-cookie-missing-samesite":
+            return await self._verify_cookie_attribute_absence(finding, "samesite=")
+        if finding.rule_id == "halo.cors-wildcard-with-credentials":
+            return await self._verify_cors_wildcard_credentials(finding)
         if finding.rule_id == "halo.openapi-undeclared-endpoint":
             return await self._verify_openapi(finding)
         if finding.rule_id == "halo.graphql-operation-outside-schema":
