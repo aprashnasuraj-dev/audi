@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from scripts.minly_har_analyzer import classify_scope, json_keys, template_path
 from scripts.minly_hypothesis_matrix import VALIDATION_MAP
 from scripts.minly_public_mapper import normalize
 
@@ -70,3 +71,12 @@ def test_hypothesis_model_has_broad_manual_validation_coverage():
     assert "session_and_recovery_state_machine" in lenses
     assert "asynchronous_jobs_and_stale_authorization" in lenses
     assert "mobile_backend_authorization_parity" in lenses
+
+
+def test_offline_har_analyzer_marks_scope_boundaries_without_expanding_scope():
+    assert classify_scope("minly.com") == "exact_web_scope"
+    assert classify_scope("merch.minly.com") == "minly_sibling_boundary_not_authorized_by_web_scope"
+    assert classify_scope("example.com") == "external_boundary"
+    assert template_path("/api/order/1234567890") == "/api/order/{id}"
+    keys = json_keys('{"requestId":"x","price":100,"nested":{"ownerId":"a"}}', "application/json")
+    assert {"requestId", "price", "ownerId"} <= set(keys)
