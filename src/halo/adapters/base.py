@@ -63,16 +63,21 @@ class IdentityAwareAdapter(VaultBoundAdapter):
         )
         findings: list[Finding] = []
         shared_context = context if context is not None else {}
+        per_identity: dict[str, Any] = {}
         try:
             for identity in selected:
                 result = await self.run_one(target, identity, shared_context)
                 findings.extend(result.findings)
+                per_identity[identity.name] = result.metadata
             coverage.tools_executed = 1
             coverage.findings = len(findings)
+            coverage.metadata["per_identity"] = per_identity
         except TimeoutError as exc:
             coverage.status = FamilyStatus.TIMEOUT
             coverage.reason = str(exc)
+            coverage.metadata["per_identity"] = per_identity
         except Exception as exc:
             coverage.status = FamilyStatus.FAILED
             coverage.reason = f"{type(exc).__name__}: {exc}"
+            coverage.metadata["per_identity"] = per_identity
         return findings, coverage
