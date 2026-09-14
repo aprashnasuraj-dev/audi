@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from typing import Any
 
 from .canonical import CanonicalIssue
@@ -16,6 +17,8 @@ class PublicationDecision:
     ran_required_families: list[str]
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    authenticated_identities: list[str] = field(default_factory=list)
+    scope_transition_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,6 +83,49 @@ def evaluate_publication(
         if not issue.evidence_sources:
             errors.append(f"canonical issue {issue.canonical_id} has no retained evidence sources")
 
+    browser = by_family.get("browser-discovery")
+    authenticated_identities: list[str] = []
+    scope_transitions: list[dict[str, Any]] = []
+    if browser is not None:
+        per_identity = browser.metadata.get("per_identity") or {}
+        for name, metadata in per_identity.items():
+            if (
+                str(metadata.get("identity_role", "")).lower() != "anonymous"
+                and bool(metadata.get("authentication_verified"))
+            ):
+                authenticated_identities.append(str(name))
+            for transition in metadata.get("scope_transitions") or []:
+                if transition not in scope_transitions:
+                    scope_transitions.append(transition)
+
+    if bool(target.get("require_authenticated_identity")) and not authenticated_identities:
+        errors.append("target requires authenticated coverage but no non-anonymous identity was verified")
+
+    for transition in scope_transitions:
+        if str(transition.get("identity_role", "")).lower() == "anonymous":
+            errors.append("scope transition was attributed to an anonymous identity")
+        if not transition.get("source_url") or not transition.get("destination_url"):
+            errors.append("scope transition is missing source/destination provenance")
+
+    live_target = bool(target.get("live_target"))
+    snapshot = target.get("scope_snapshot")
+    max_age = target.get("scope_max_age_days")
+    if live_target and not snapshot:
+        errors.append("live target has no scope_snapshot")
+    if snapshot:
+        try:
+            snapshot_date = date.fromisoformat(str(snapshot))
+        except ValueError:
+            errors.append(f"scope_snapshot is not ISO date YYYY-MM-DD: {snapshot!r}")
+        else:
+            age_days = (date.today() - snapshot_date).days
+            if age_days < 0:
+                errors.append(f"scope_snapshot {snapshot_date.isoformat()} is in the future")
+            if max_age is not None and age_days > int(max_age):
+                errors.append(
+                    f"scope snapshot is stale: age={age_days}d exceeds scope_max_age_days={int(max_age)}"
+                )
+
     ratio = len(ran_required) / len(required) if required else 1.0
     minimum = float(target.get("minimum_coverage_ratio", 1.0))
     if ratio < minimum:
@@ -92,4 +138,6 @@ def evaluate_publication(
         ran_required_families=sorted(ran_required),
         errors=errors,
         warnings=warnings,
+        authenticated_identities=sorted(authenticated_identities),
+        scope_transition_count=len(scope_transitions),
     )
