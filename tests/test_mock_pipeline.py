@@ -5,8 +5,8 @@ import pytest
 from halo.adapters.browser_discovery import BrowserDiscoveryAdapter
 from halo.adapters.replay_runtime import ReplayRuntimeAdapter
 from halo.identity import IdentityVault
+from halo.mock_target import mock_server
 from halo.models import FamilyStatus, Identity
-from tests.mock_target import mock_server
 
 
 @pytest.mark.asyncio
