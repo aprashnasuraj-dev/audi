@@ -10,6 +10,7 @@ from .models import Finding
 _SEVERITY_RANK = {
     "unknown": 0,
     "informational": 1,
+    "info": 1,
     "low": 2,
     "medium": 3,
     "high": 4,
@@ -47,6 +48,8 @@ class CanonicalIssue:
     tools: list[str] = field(default_factory=list)
     identities: list[str] = field(default_factory=list)
     evidence_sources: list[EvidenceSource] = field(default_factory=list)
+    novelty: str = "UNKNOWN"
+    known_issue_match: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +65,8 @@ class CanonicalIssue:
             "identities": self.identities,
             "source_count": len(self.evidence_sources),
             "evidence_sources": [source.to_dict() for source in self.evidence_sources],
+            "novelty": self.novelty,
+            "known_issue_match": self.known_issue_match,
         }
 
 
@@ -81,7 +86,6 @@ def _endpoint_parts(url: str, weakness: str) -> tuple[str, str, str]:
     scheme = (split.scheme or "artifact").lower()
     host = (split.hostname or "-").lower()
     path = split.path or url or "/"
-    # HSTS is an origin policy; observations on multiple paths are one issue.
     if weakness == "web.missing-hsts":
         path = "/"
     return scheme, host, path
@@ -91,8 +95,6 @@ def _key(target: str, finding: Finding) -> str:
     weakness = normalized_weakness(finding)
     scheme, host, path = _endpoint_parts(finding.url, weakness)
     parts = [target, scheme, host, path, weakness]
-    # Authorization differentials are identity-sensitive; ordinary hardening and
-    # contract observations are not, so corroborating identities merge as evidence.
     if finding.family == "runtime-verification":
         parts.extend([finding.identity or "-", finding.compared_identity or "-"])
     return "|".join(parts)
@@ -140,3 +142,36 @@ def canonicalize_findings(findings: list[Finding], target: str) -> list[Canonica
             evidence_sources=sources,
         ))
     return issues
+
+
+def classify_known_issues(issues: list[CanonicalIssue], target: dict) -> None:
+    """Classify against supplied fingerprints without claiming novelty from counts.
+
+    KNOWN means an exact supplied fingerprint matched. UNMATCHED means a catalog
+    was supplied but did not match. UNKNOWN means no fingerprint catalog exists;
+    this is the correct state when a program exposes only aggregate known-issue
+    counts such as '135' or '15'.
+    """
+
+    catalog = target.get("known_issue_fingerprints")
+    if not catalog:
+        for issue in issues:
+            issue.novelty = "UNKNOWN"
+            issue.known_issue_match = None
+        return
+
+    fingerprints = [dict(item or {}) for item in catalog if isinstance(item, dict)]
+    for issue in issues:
+        matched = None
+        for fingerprint in fingerprints:
+            canonical_key = str(fingerprint.get("canonical_key") or "")
+            weakness = str(fingerprint.get("weakness") or "")
+            url = str(fingerprint.get("url") or "")
+            if canonical_key and canonical_key == issue.canonical_key:
+                matched = fingerprint
+                break
+            if weakness and url and weakness == issue.weakness and url == issue.url:
+                matched = fingerprint
+                break
+        issue.novelty = "KNOWN" if matched else "UNMATCHED"
+        issue.known_issue_match = matched
