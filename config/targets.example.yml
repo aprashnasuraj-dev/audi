@@ -1,34 +1,59 @@
 schema_version: 1
 targets:
-  - name: example-web
-    url: https://example.test/
+  - name: example-live-web
+    url: https://app.example.test/
+
+    # Seed authorization is exact. Do not convert this to a wildcard just to
+    # increase coverage. Navigation-derived authenticated flows are governed by
+    # authenticated_flow_suffixes and the scope-transition evidence path.
     allow_hosts:
+      - app.example.test
+    authenticated_flow_suffixes:
       - example.test
+    deny_hosts:
+      - blocked.example.test
+
+    live_target: true
+    scope_snapshot: "2026-09-14"
+    scope_max_age_days: 60
+    scope_note: "Replace with the current written authorization reference/boundary before a live run."
+
     identities:
       - anonymous
-      - user
-      - admin
+      - example-user
+    require_authenticated_identity: true
+
     technologies:
       - web
-    # Any listed family must RAN for publication to pass. Add optional families
-    # here when their inputs are mandatory for the real target.
+
+    # Publication fails if a required family does not successfully execute.
     required_families:
       - browser-discovery
       - runtime-verification
       - web-hardening
     minimum_coverage_ratio: 1.0
+
     limits:
       max_pages: 25
       request_budget: 250
       timeout_seconds: 10
+      max_requests_per_second: 2
+      stop_on_429: true
+
     browser:
       settle_ms: 750
-    # Optional family inputs. Missing values become explicit SKIPPED states.
+      allow_third_party_resources: true
+
+    # Optional inputs. Add a family to required_families when the corresponding
+    # input is mandatory for this target and assurance claim.
     openapi: null
     graphql_schema: null
     container_image: null
-    iac_globs:
-      - infra/**/*.tf
-    # Set source_root only when local source for THIS target is available. The
-    # technology resolver never treats the HALO auditor repository as target source.
+    iac_globs: []
+
+    # Set this only when local source for THIS target is intentionally available.
+    # HALO does not infer target technology from the auditor repository itself.
     source_root: null
+
+    # Optional fingerprints for conservative known-issue/novelty classification.
+    known_issues: []
