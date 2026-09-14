@@ -17,7 +17,12 @@ async def test_mock_target_proves_authenticated_discovery_and_replay():
         target = {
             "url": seed,
             "allow_hosts": ["127.0.0.1"],
-            "limits": {"max_pages": 10, "request_budget": 100, "timeout_seconds": 5},
+            "limits": {
+                "max_pages": 10,
+                "request_budget": 100,
+                "timeout_seconds": 5,
+                "max_requests_per_second": 20,
+            },
             "browser": {"settle_ms": 150},
         }
         vault = IdentityVault({
@@ -61,4 +66,47 @@ async def test_mock_target_proves_authenticated_discovery_and_replay():
             finding for finding in findings
             if finding.rule_id == "halo.identity-response-differential"
         ]
-        assert differentials, "cross-identity replay must detect at least one response difference"
+        assert differentials, "cross-identity replay must detect at least one material response difference"
+
+
+@pytest.mark.asyncio
+async def test_authenticated_navigation_can_grant_exact_flow_host_but_blocks_unrelated_host():
+    with mock_server() as seed:
+        port = seed.rstrip("/").rsplit(":", 1)[1]
+        target = {
+            "url": f"{seed}?flow=1",
+            "allow_hosts": ["127.0.0.1"],
+            "authenticated_flow_hosts": ["localhost"],
+            "deny_hosts": ["blocked.invalid", "*.blocked.invalid"],
+            "require_authenticated_identity": True,
+            "limits": {
+                "max_pages": 5,
+                "request_budget": 80,
+                "timeout_seconds": 5,
+                "max_requests_per_second": 20,
+            },
+            "browser": {"settle_ms": 250, "allow_third_party_resources": False},
+        }
+        user = Identity(
+            "user",
+            role="user",
+            headers={"Authorization": "Bearer user-token"},
+            auth_check_url=f"{seed}api/me",
+            auth_check_contains='"user": "user"',
+        )
+        vault = IdentityVault({"anonymous": Identity("anonymous"), "user": user})
+        context: dict = {}
+
+        _, coverage = await BrowserDiscoveryAdapter().run_for_identities(
+            "mock-flow", target, vault, identities=["user"], context=context
+        )
+        assert coverage.status is FamilyStatus.RAN
+        user_meta = coverage.metadata["per_identity"]["user"]
+        assert user_meta["authentication_verified"] is True
+        assert any(item["host"] == "localhost" for item in context["scope_transitions"])
+        assert any(item["identity"] == "user" for item in context["scope_transitions"])
+        assert any(
+            item["url"].startswith(f"http://localhost:{port}/flow")
+            for item in context["discovered"]["user"]["urls"]
+        )
+        assert any("blocked.invalid" in item["url"] for item in user_meta["blocked_requests"])
