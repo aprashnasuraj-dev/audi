@@ -14,15 +14,31 @@ class AdapterRun:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class IdentityAwareAdapter(ABC):
-    """Base contract for every DAST/API adapter.
+class VaultBoundAdapter(ABC):
+    """Mandatory contract for every DAST/API adapter.
 
-    Adapters do not choose a privileged singleton identity. The runner expands
-    the selected identity set and records which identities were actually used.
+    The identity vault is part of the public run signature. An adapter that does
+    not inherit this contract cannot be registered as a network-facing family.
     """
 
     name = "base"
     family = "unknown"
+
+    @abstractmethod
+    async def run_for_identities(
+        self,
+        target_name: str,
+        target: dict[str, Any],
+        vault: IdentityVault,
+        *,
+        identities: list[str] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[list[Finding], CoverageRecord]:
+        raise NotImplementedError
+
+
+class IdentityAwareAdapter(VaultBoundAdapter):
+    """Base contract for adapters that execute once per selected identity."""
 
     @abstractmethod
     async def run_one(self, target: dict[str, Any], identity: Identity, context: dict[str, Any]) -> AdapterRun:
