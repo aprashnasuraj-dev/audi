@@ -123,3 +123,26 @@ def test_publication_accepts_verified_auth_and_transition_provenance():
     assert decision.passed
     assert decision.authenticated_identities == ["user"]
     assert decision.scope_transition_count == 1
+
+
+def test_publication_accepts_truthful_public_surface_when_auth_is_optional():
+    coverage = _passing_coverage()
+    coverage[1] = CoverageRecord(
+        "fixture",
+        "runtime-verification",
+        FamilyStatus.SKIPPED,
+        reason="runtime differential verification requires at least two trusted identities",
+        tools_expected=1,
+        identities_attempted=["anonymous"],
+    )
+    target = {
+        "authentication_mode": "optional",
+        "required_families": ["browser-discovery", "web-hardening"],
+    }
+    decision = evaluate_publication(target, coverage, [], hypothesis_enabled=True)
+    assert decision.passed, decision.errors
+    assert decision.authentication_mode == "optional"
+    assert decision.coverage_ratio == 1.0
+    assert "runtime-verification" not in decision.required_families
+    assert any("public/anonymous surface" in warning for warning in decision.warnings)
+    assert any("runtime-verification skipped" in warning for warning in decision.warnings)
