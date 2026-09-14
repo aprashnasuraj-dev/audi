@@ -1,22 +1,24 @@
 schema_version: 1
 targets:
-  - name: mock-local
-    url: http://127.0.0.1:8765/
+  - name: staging-web
+    url: https://staging.example.org/
     allow_hosts:
-      - 127.0.0.1
+      - staging.example.org
+      - "*.staging.example.org"
     identities:
       - anonymous
       - user
       - admin
     limits:
-      max_pages: 10
-      request_budget: 100
-      timeout_seconds: 5
+      max_pages: 25
+      request_budget: 250
+      timeout_seconds: 10
     browser:
-      settle_ms: 250
-    # Optional family inputs. Missing values become explicit SKIPPED states.
-    openapi: null
-    graphql_schema: null
+      settle_ms: 750
+    # Optional family inputs. Absence is reported as SKIPPED with a reason.
+    openapi: contracts/openapi.yml
+    graphql_schema: contracts/schema.graphql
     container_image: null
     iac_globs:
       - infra/**/*.tf
+      - deploy/**/*.yaml
