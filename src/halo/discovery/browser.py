@@ -1,12 +1,51 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
 from ..live_safety import LiveSafetyController, LiveSafetyStop
 from ..models import Identity
 from ..scope import ScopePolicy, ScopeState
+
+_GRAPHQL_OPERATION = re.compile(r"\b(?:query|mutation|subscription)\s+([_A-Za-z][_0-9A-Za-z]*)")
+_GRAPHQL_ROOT = re.compile(r"\{\s*([_A-Za-z][_0-9A-Za-z]*)")
+_SAFE_RESPONSE_HEADERS = frozenset({
+    "server",
+    "via",
+    "cf-ray",
+    "cf-cache-status",
+    "x-sucuri-id",
+    "x-akamai-transformed",
+    "strict-transport-security",
+    "content-security-policy",
+    "x-frame-options",
+    "x-content-type-options",
+})
+
+
+def _graphql_operation_from_post_data(post_data: str | None) -> str | None:
+    if not post_data:
+        return None
+    try:
+        payload = json.loads(post_data)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    operation_name = payload.get("operationName")
+    if isinstance(operation_name, str) and operation_name.strip():
+        return operation_name.strip()
+    query = payload.get("query")
+    if not isinstance(query, str):
+        return None
+    match = _GRAPHQL_OPERATION.search(query)
+    if match:
+        return match.group(1)
+    match = _GRAPHQL_ROOT.search(query)
+    return match.group(1) if match else None
 
 
 @dataclass
@@ -16,6 +55,7 @@ class DiscoveryResult:
     network_urls: list[str] = field(default_factory=list)
     requests: list[dict[str, str]] = field(default_factory=list)
     responses: list[dict[str, object]] = field(default_factory=list)
+    websockets: list[str] = field(default_factory=list)
     blocked_requests: list[dict[str, str]] = field(default_factory=list)
     passive_third_party_requests: list[dict[str, str]] = field(default_factory=list)
     total_requests: int = 0
@@ -35,6 +75,8 @@ class BrowserCrawler:
     Only seed or navigation-derived FLOW_ALLOWED hosts are audited. Third-party
     static resources may optionally load so SPAs remain functional, but they are
     never added to audit inventory and authentication headers are stripped.
+    Request bodies are never retained; GraphQL POSTs expose only an operation
+    name derived in-memory.
     """
 
     PASSIVE_RESOURCE_TYPES = frozenset({"stylesheet", "script", "image", "font", "media"})
@@ -156,11 +198,19 @@ class BrowserCrawler:
                 result.total_requests += 1
                 headers = dict(request.headers)
                 headers.update(identity.headers)
-                result.requests.append({
+                record = {
                     "method": str(request.method).upper(),
                     "url": allowed_url,
                     "resource_type": resource_type,
-                })
+                }
+                content_type = headers.get("content-type") or headers.get("Content-Type")
+                if content_type:
+                    record["content_type"] = str(content_type).split(";", 1)[0].strip().lower()
+                if "graphql" in (urlsplit(allowed_url).path or "").lower():
+                    operation = _graphql_operation_from_post_data(request.post_data)
+                    if operation:
+                        record["graphql_operation"] = operation
+                result.requests.append(record)
                 if resource_type in {"xhr", "fetch"}:
                     result.network_urls.append(allowed_url)
                 await route.continue_(headers=headers)
@@ -173,17 +223,30 @@ class BrowserCrawler:
                 host = urlsplit(url).hostname or ""
                 if not self.scope.allows_host(host):
                     return
+                headers = await response.all_headers()
+                selected_headers = {
+                    key: value for key, value in headers.items()
+                    if key.lower() in _SAFE_RESPONSE_HEADERS
+                }
                 result.responses.append({
                     "url": url,
                     "status": int(response.status),
-                    "content_type": str((await response.all_headers()).get("content-type", "")),
+                    "content_type": str(headers.get("content-type", "")),
+                    "headers": selected_headers,
                 })
                 try:
-                    self.safety.observe_response(url, int(response.status), await response.all_headers())
+                    self.safety.observe_response(url, int(response.status), headers)
                 except LiveSafetyStop as exc:
                     result.rate_limit_stop = str(exc)
 
+            def observe_websocket(socket) -> None:
+                url = str(socket.url)
+                host = urlsplit(url).hostname or ""
+                if self.scope.allows_host(host) and url not in result.websockets:
+                    result.websockets.append(url)
+
             page.on("response", lambda response: asyncio.create_task(observe_response(response)))
+            page.on("websocket", observe_websocket)
 
             if identity.role != "anonymous":
                 if not identity.auth_check_url:
