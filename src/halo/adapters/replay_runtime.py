@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from itertools import combinations
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..identity import IdentityVault
 from ..models import CoverageRecord, FamilyStatus, Finding
@@ -52,6 +53,7 @@ class ReplayRuntimeAdapter:
         guard = ScopeGuard(tuple(target["allow_hosts"]))
         replay = ReplayTransport(guard, timeout=float(target.get("limits", {}).get("timeout_seconds", 10)))
         findings: list[Finding] = []
+        seen_authz: set[tuple[str, str]] = set()
         try:
             for identity_a, identity_b in combinations(selected, 2):
                 for (method, url), item in sorted(request_index.items()):
@@ -60,6 +62,34 @@ class ReplayRuntimeAdapter:
                         identity_a,
                         identity_b,
                     )
+
+                    # Seeded/mock and real account-manager guard: a non-admin identity
+                    # receiving 2xx from an obvious admin surface is stronger evidence
+                    # than a generic response difference. Keep this narrow and explicit;
+                    # path semantics alone do not prove a vulnerability elsewhere.
+                    if "/admin" in (urlsplit(url).path or "").lower():
+                        for name, fp in ((identity_a.name, diff.a), (identity_b.name, diff.b)):
+                            if name not in {"anonymous", "admin"} and 200 <= fp.status_code < 300:
+                                key = (name, url)
+                                if key not in seen_authz:
+                                    seen_authz.add(key)
+                                    findings.append(Finding(
+                                        tool=self.name,
+                                        family=self.family,
+                                        rule_id="halo.nonadmin-admin-surface-access",
+                                        title="Non-admin identity reached an admin surface",
+                                        severity="high",
+                                        url=url,
+                                        identity=name,
+                                        confidence=90,
+                                        evidence_grade="differential",
+                                        evidence={
+                                            "method": method,
+                                            "status": fp.status_code,
+                                            "comparison": f"captured/replayed across {identity_a.name} and {identity_b.name}",
+                                        },
+                                    ))
+
                     if not diff.different:
                         continue
                     findings.append(Finding(
