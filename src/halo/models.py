@@ -57,6 +57,10 @@ class Identity:
     role: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     cookies: dict[str, str] = field(default_factory=dict)
+    storage_state_path: str | None = None
+    auth_check_url: str | None = None
+    auth_check_contains: str | None = None
+    auth_check_selector: str | None = None
 
     def __post_init__(self) -> None:
         role = self.role.strip().lower()
@@ -70,6 +74,11 @@ class Identity:
         if role not in {"anonymous", "user", "admin"}:
             raise ValueError(f"unsupported identity role {role!r}")
         object.__setattr__(self, "role", role)
+        if role != "anonymous" and self.storage_state_path is None and not self.headers and not self.cookies:
+            # The identity can still be declared lazily, but once instantiated it
+            # must carry some authentication material rather than masquerading as
+            # an authenticated role.
+            raise ValueError(f"authenticated identity {self.name!r} has no authentication material")
 
 
 @dataclass(frozen=True)
